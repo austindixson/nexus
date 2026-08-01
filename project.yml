@@ -1,0 +1,87 @@
+name: Nexus
+options:
+  bundleIdPrefix: com.ghost64
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  defaultConfig: Debug
+  groupSortPosition: top
+  xcodeVersion: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+    PRODUCT_NAME: Nexus
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  Nexus:
+    type: application
+    platform: macOS
+    sources:
+      - path: Nexus
+        excludes:
+          - "**/.DS_Store"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ghost64.nexus
+        INFOPLIST_KEY_CFBundleDisplayName: Nexus
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+        INFOPLIST_KEY_NSHumanReadableCopyright: "Copyright © 2026. MIT License."
+        INFOPLIST_KEY_NSPrincipalClass: NSApplication
+        GENERATE_INFOPLIST_FILE: YES
+        COMBINE_HIDPI_IMAGES: YES
+        ENABLE_PREVIEWS: YES
+        ENABLE_TESTABILITY: YES
+        SWIFT_EMIT_LOC_STRINGS: YES
+        LD_RUNPATH_SEARCH_PATHS:
+          - "$(inherited)"
+          - "@executable_path/../Frameworks"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    info:
+      path: Nexus/Info.plist
+      properties:
+        CFBundleName: Nexus
+        CFBundleDisplayName: Nexus
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "14.0"
+        NSHighResolutionCapable: true
+        NSSupportsAutomaticGraphicsSwitching: true
+        NSMainNibFile: ""
+        LSUIElement: false
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Markdown Document
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - net.daringfireball.markdown
+              - public.plain-text
+            CFBundleTypeExtensions:
+              - md
+              - markdown
+        UTExportedTypeDeclarations: []
+    entitlements:
+      path: Nexus/Nexus.entitlements
+    scheme:
+      testTargets:
+        - NexusTests
+  NexusTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: NexusTests
+    dependencies:
+      - target: Nexus
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.ghost64.nexus.tests
+        PRODUCT_MODULE_NAME: NexusTests
+        GENERATE_INFOPLIST_FILE: YES
+        ENABLE_TESTABILITY: YES
+        BUNDLE_LOADER: "$(TEST_HOST)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Nexus.app/Contents/MacOS/Nexus"
