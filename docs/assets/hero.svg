@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Nexus — native macOS knowledge base</title>
+  <desc id="desc">Hero banner: product name, tagline, and stylized knowledge graph.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a0c16"/>
+      <stop offset="50%" stop-color="#12152a"/>
+      <stop offset="100%" stop-color="#1a1345"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="75%" cy="45%" r="40%">
+      <stop offset="0%" stop-color="#6366f1" stop-opacity="0.45"/>
+      <stop offset="100%" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="70%" cy="55%" r="30%">
+      <stop offset="0%" stop-color="#22d3ee" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#f8fafc"/>
+      <stop offset="100%" stop-color="#c7d2fe"/>
+    </linearGradient>
+    <linearGradient id="hub" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#a5f3fc"/>
+      <stop offset="100%" stop-color="#818cf8"/>
+    </linearGradient>
+    <style>
+      .name { font: 800 72px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: url(#word); }
+      .tag { font: 500 26px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #b6c0e0; }
+      .pill { font: 600 14px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #dbe4ff; }
+      .edge { stroke: #67e8f9; stroke-width: 1.6; opacity: 0.55; fill: none; }
+      .edge2 { stroke: #c4b5fd; stroke-width: 1.4; opacity: 0.5; fill: none; }
+    </style>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+  <rect width="1280" height="640" fill="url(#glow2)"/>
+
+  <!-- left copy -->
+  <text x="80" y="250" class="name">Nexus</text>
+  <text x="80" y="310" class="tag">Native macOS knowledge base</text>
+  <text x="80" y="350" class="tag" style="font-size:20px; fill:#8b95b8;">Local-first Markdown · Obsidian-style links · Metal graph</text>
+
+  <rect x="80" y="390" width="150" height="34" rx="17" fill="#1e2440" stroke="#3d4a7a"/>
+  <text x="155" y="412" text-anchor="middle" class="pill">macOS 14+</text>
+  <rect x="244" y="390" width="110" height="34" rx="17" fill="#1e2440" stroke="#3d4a7a"/>
+  <text x="299" y="412" text-anchor="middle" class="pill">Swift</text>
+  <rect x="368" y="390" width="90" height="34" rx="17" fill="#1e2440" stroke="#3d4a7a"/>
+  <text x="413" y="412" text-anchor="middle" class="pill">MIT</text>
+  <rect x="472" y="390" width="130" height="34" rx="17" fill="#1e2440" stroke="#3d4a7a"/>
+  <text x="537" y="412" text-anchor="middle" class="pill">Offline</text>
+
+  <!-- right graph constellation -->
+  <g transform="translate(760,140)">
+    <line class="edge" x1="200" y1="180" x2="80" y2="80"/>
+    <line class="edge" x1="200" y1="180" x2="60" y2="200"/>
+    <line class="edge" x1="200" y1="180" x2="120" y2="300"/>
+    <line class="edge2" x1="200" y1="180" x2="320" y2="70"/>
+    <line class="edge2" x1="200" y1="180" x2="360" y2="160"/>
+    <line class="edge" x1="200" y1="180" x2="340" y2="280"/>
+    <line class="edge2" x1="80" y1="80" x2="320" y2="70"/>
+    <line class="edge" x1="60" y1="200" x2="120" y2="300"/>
+    <line class="edge2" x1="360" y1="160" x2="340" y2="280"/>
+    <line class="edge" x1="80" y1="80" x2="60" y2="200"/>
+    <line class="edge2" x1="320" y1="70" x2="360" y2="160"/>
+    <circle cx="200" cy="180" r="28" fill="url(#hub)"/>
+    <circle cx="200" cy="180" r="40" fill="none" stroke="#a5f3fc" stroke-opacity="0.35" stroke-width="2"/>
+    <circle cx="80" cy="80" r="12" fill="#67e8f9"/>
+    <circle cx="60" cy="200" r="10" fill="#818cf8"/>
+    <circle cx="120" cy="300" r="11" fill="#a78bfa"/>
+    <circle cx="320" cy="70" r="10" fill="#22d3ee"/>
+    <circle cx="360" cy="160" r="13" fill="#c4b5fd"/>
+    <circle cx="340" cy="280" r="9" fill="#38bdf8"/>
+    <circle cx="140" cy="140" r="5" fill="#e0e7ff" opacity="0.8"/>
+    <circle cx="280" cy="220" r="4" fill="#e0e7ff" opacity="0.7"/>
+    <circle cx="250" cy="100" r="4" fill="#e0e7ff" opacity="0.6"/>
+  </g>
+</svg>

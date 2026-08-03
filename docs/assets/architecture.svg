@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="520" viewBox="0 0 960 520" role="img" aria-labelledby="title desc">
+  <title id="title">Nexus architecture</title>
+  <desc id="desc">Layered architecture: Vault files, VaultService and FSEvents, LinkIndex and Search, AppState, and SwiftUI AppKit views including Metal graph.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f1220"/>
+      <stop offset="100%" stop-color="#1a1340"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#22d3ee"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .label { font: 600 14px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #e8eaf6; }
+      .sub { font: 500 11px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #9aa3c7; }
+      .title { font: 700 18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #f4f6ff; }
+      .chip { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #c4d0ff; }
+      .box { fill: #171b2e; stroke: #2a3358; stroke-width: 1.5; rx: 14; }
+      .box-hi { fill: #1b2140; stroke: url(#accent); stroke-width: 1.8; rx: 14; }
+      .arrow { stroke: #5b6aa8; stroke-width: 1.6; fill: none; marker-end: url(#m); }
+    </style>
+    <marker id="m" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill="#5b6aa8"/>
+    </marker>
+  </defs>
+  <rect width="960" height="520" fill="url(#bg)" rx="20"/>
+  <text x="40" y="42" class="title">Architecture — native stack, local-first</text>
+  <text x="40" y="64" class="sub">No Electron · No cloud accounts · Your Markdown stays on disk</text>
+
+  <!-- Layer 1 -->
+  <rect x="40" y="96" width="880" height="72" class="box"/>
+  <text x="60" y="126" class="label">Vault (filesystem)</text>
+  <text x="60" y="148" class="chip">.md notes  ·  attachments  ·  folders  ·  .nexus/workspace.json</text>
+
+  <!-- arrows -->
+  <path class="arrow" d="M480 168 L480 196"/>
+
+  <!-- Layer 2 -->
+  <rect x="40" y="200" width="420" height="88" class="box-hi"/>
+  <text x="60" y="232" class="label">VaultService</text>
+  <text x="60" y="254" class="sub">Open vault · scan tree · security-scoped bookmarks</text>
+  <text x="60" y="272" class="chip">FSEvents live rescan</text>
+
+  <rect x="500" y="200" width="420" height="88" class="box-hi"/>
+  <text x="520" y="232" class="label">LinkIndex + SearchService</text>
+  <text x="520" y="254" class="sub">Wikilinks · backlinks · tags · graph snapshot</text>
+  <text x="520" y="272" class="chip">path:  tag:  file:  operators</text>
+
+  <path class="arrow" d="M250 288 L250 316"/>
+  <path class="arrow" d="M710 288 L710 316"/>
+  <path class="arrow" d="M250 316 L480 316 L480 336"/>
+  <path class="arrow" d="M710 316 L480 316"/>
+
+  <!-- Layer 3 -->
+  <rect x="200" y="340" width="560" height="64" class="box"/>
+  <text x="220" y="368" class="label">AppState</text>
+  <text x="220" y="388" class="sub">Tabs · mode · graph filters · workspace persistence · plugin host</text>
+
+  <path class="arrow" d="M480 404 L480 428"/>
+
+  <!-- Layer 4 views -->
+  <rect x="40" y="432" width="160" height="60" class="box"/>
+  <text x="56" y="458" class="label">Editor</text>
+  <text x="56" y="476" class="chip">NSTextView + preview</text>
+
+  <rect x="220" y="432" width="160" height="60" class="box-hi" filter="url(#glow)"/>
+  <text x="236" y="458" class="label">Graph</text>
+  <text x="236" y="476" class="chip">Metal + force layout</text>
+
+  <rect x="400" y="432" width="160" height="60" class="box"/>
+  <text x="416" y="458" class="label">Canvas</text>
+  <text x="416" y="476" class="chip">cards · groups · arrows</text>
+
+  <rect x="580" y="432" width="160" height="60" class="box"/>
+  <text x="596" y="458" class="label">Sidebars</text>
+  <text x="596" y="476" class="chip">files · outline · backlinks</text>
+
+  <rect x="760" y="432" width="160" height="60" class="box"/>
+  <text x="776" y="458" class="label">Palette</text>
+  <text x="776" y="476" class="chip">⌘P commands</text>
+</svg>
