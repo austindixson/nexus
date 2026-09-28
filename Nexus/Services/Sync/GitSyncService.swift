@@ -661,6 +661,14 @@ final class GitSyncService: ObservableObject {
 
     nonisolated private static let gitPath = "/usr/bin/git"
 
+    /// Bumped whenever sync diagnostics change, so smoke reports prove which
+    /// build produced them.
+    nonisolated static let diagnosticsTag = "2026-09-28-4"
+
+    nonisolated static func gitPathPresent() -> Bool {
+        FileManager.default.isExecutableFile(atPath: "/usr/bin/git")
+    }
+
     /// Synchronous git runner for the rare call sites that must not suspend
     /// (conflict detection inside a cycle). Off-main only; never use in async code.
     nonisolated private static func runGitBlocking(_ arguments: [String], at cwd: URL, timeout: TimeInterval) throws -> GitResult {
@@ -782,11 +790,21 @@ final class GitSyncService: ObservableObject {
                     outData.finish()
                     errData.finish()
                     timeoutTask.cancel()
-                    let result = GitResult(
+                    var result = GitResult(
                         exitCode: proc.terminationStatus,
                         stdout: outData.snapshot(),
                         stderr: errData.snapshot()
                     )
+                    // Signal death (e.g. SIGKILL from the system) produces no output;
+                    // annotate so the sync UI is not silent.
+                    if result.exitCode != 0, result.stdout.isEmpty, result.stderr.isEmpty,
+                       proc.terminationReason == .uncaughtSignal {
+                        result = GitResult(
+                            exitCode: result.exitCode,
+                            stdout: "",
+                            stderr: "git was killed by a signal (exit \(result.exitCode))."
+                        )
+                    }
                     box.resume { result }
                 }
                 do {
