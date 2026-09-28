@@ -179,6 +179,14 @@ final class GitSyncService: ObservableObject {
         loadSettings()
     }
 
+    /// Wipe persisted sync settings (tests + "reset sync" affordances).
+    func resetPersistedSettingsForTesting() {
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
+        settings = SyncSettings()
+        status = SyncStatus()
+        settingsRevision += 1
+    }
+
     // MARK: - Lifecycle
 
     /// Called when a vault opens (or closes). Loads per-vault settings and starts/stops timers.
@@ -493,7 +501,15 @@ final class GitSyncService: ObservableObject {
         commitTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: delay)
             guard let self, !Task.isCancelled, self.pendingChanges else { return }
-            _ = try? await self.commitLocalChanges(message: "nexus: sync \(Self.stamp())")
+            do {
+                _ = try await self.commitLocalChanges(message: "nexus: sync \(Self.stamp())")
+                self.pendingChanges = false
+            } catch {
+                // Never swallow: an uncommitted vault means changes that never reach
+                // the remote. Surface it; the interval cycle retries anyway.
+                self.status.phase = .error
+                self.status.lastError = error.localizedDescription
+            }
         }
     }
 
@@ -516,14 +532,44 @@ final class GitSyncService: ObservableObject {
                     _ = try await runGit(["init"], at: vaultRoot)
                     _ = try await runGit(["symbolic-ref", "HEAD", "refs/heads/\(safeBranch())"], at: vaultRoot)
                 }
-                try writeSafetyGitignore(at: vaultRoot)
             }
+            // Safety ignore runs on every re-enable too: an existing repo (e.g. an
+            // iCloud vault the user already versioned) would otherwise track the
+            // machine-local sidecars in .nexus/.
+            try writeSafetyGitignore(at: vaultRoot)
             await ensureLocalIdentity(at: vaultRoot)
+            // The identity must exist *before* the first commit or git refuses with
+            // "Please tell me who you are". Settings are the authoritative source.
+            if settings.authorName.isEmpty || settings.authorEmail.isEmpty {
+                var seeded = settings
+                if seeded.authorName.isEmpty {
+                    seeded.authorName = ProcessInfo.processInfo.userName.isEmpty ? "Nexus" : ProcessInfo.processInfo.userName
+                }
+                if seeded.authorEmail.isEmpty {
+                    let host = ProcessInfo.processInfo.hostName
+                    let user = ProcessInfo.processInfo.userName
+                    seeded.authorEmail = "\(user)@\(host.isEmpty ? "localhost" : host)"
+                }
+                saveSettings(seeded)
+                await ensureLocalIdentity(at: vaultRoot)
+            }
             try await ensureRemoteConfigured(at: vaultRoot)
             // If the remote already has commits (shared repo from another machine),
             // pull them before the first commit to avoid unrelated-histories pain.
             let hasRemoteCommits = await remoteHasCommits()
             if hasRemoteCommits {
+                // Adopt the remote's branch when our local HEAD is unborn — pushing a
+                // branch that does not exist locally fails with "src refspec …".
+                let headExists = try await git(["rev-parse", "--verify", "HEAD"])
+                if !headExists.ok,
+                   let probe = try? await git(["ls-remote", "--heads", "origin"]), probe.ok,
+                   let remoteBranch = Self.pickRemoteBranch(from: probe.stdout, preferred: settings.branch),
+                   remoteBranch != settings.branch {
+                    var adopted = settings
+                    adopted.branch = remoteBranch
+                    saveSettings(adopted)
+                    _ = try await git(["checkout", "-q", "-B", remoteBranch, "origin/\(remoteBranch)"])
+                }
                 status.lastAction = "Pulling initial history…"
                 try await pull(rebase: true)
             }
@@ -544,6 +590,18 @@ final class GitSyncService: ObservableObject {
         }
     }
 
+    /// One-shot cycle against an explicitly supplied remote (headless smoke runs).
+    /// Applies the override to settings first, then delegates to `syncNow()`, so
+    /// `.nexus/sync.json`, git config, and the vault repo all end up consistent.
+    func syncOnce(remoteOverride: String) async {
+        var next = settings
+        next.remote = remoteOverride.trimmingCharacters(in: .whitespacesAndNewlines)
+        next.enabled = true
+        if next.branch.isEmpty { next.branch = "main" }
+        saveSettings(next)
+        await syncNow()
+    }
+
     /// Run one full sync cycle (autocommit → pull --rebase → push). Safe to call manually.
     func syncNow() async {
         guard settings.enabled, !status.isBusy, let vaultRoot else { return }
@@ -553,13 +611,25 @@ final class GitSyncService: ObservableObject {
         do {
             await ensureLocalIdentity(at: vaultRoot)
             try await ensureRemoteConfigured(at: vaultRoot)
-            status.phase = .scanning
+            // Committing on a foreign/detached HEAD produces commits the push
+            // can't deliver — switch to the configured branch first.
+            try await ensureHeadOnConfiguredBranch(at: vaultRoot)
+            // Commit first: `git pull --rebase` refuses to run over an unclean
+            // worktree, so local edits must be committed before we integrate remote
+            // commits.
             let dirty = try await commitLocalChanges(message: "nexus: sync \(Self.stamp())")
             status.phase = .pulling
             status.lastAction = dirty ? "Pushing local changes…" : "Pulling…"
             try await pull(rebase: true)
             status.phase = .pushing
-            try await push()
+            do {
+                try await push()
+            } catch {
+                // A committed vault must not report "synced" while the remote is behind —
+                // aheadCount tells the UI the truth and the interval cycle retries.
+                await refreshCounts(at: vaultRoot)
+                throw error
+            }
             status.phase = .idle
             status.lastSyncAt = Date()
             status.lastError = nil
@@ -743,9 +813,10 @@ final class GitSyncService: ObservableObject {
         }
         args += ["-c", "protocol.file.allow=\(fileAllow)"] + arguments
         let remote = GitRemote.parse(settings.remote)
-        return try await withAskpassInstalled(using: remote) {
+        let res = try await withAskpassInstalled(using: remote) {
             try await self.runGit(args, at: vaultRoot, timeout: Self.gitTimeout(for: arguments))
         }
+        return res
     }
 
     /// Per-command timeouts (seconds). Network ops get generous budgets; local
@@ -768,6 +839,26 @@ final class GitSyncService: ObservableObject {
         let direct = fm.fileExists(atPath: url.appendingPathComponent(".git").path)
             || fm.fileExists(atPath: url.appendingPathComponent("HEAD").path)
         return direct
+    }
+
+    /// Move HEAD onto the configured branch (create if the vault has no commits yet).
+    private func ensureHeadOnConfiguredBranch(at vaultRoot: URL) async throws {
+        let branch = safeBranchForArg()
+        let current = try await git(["symbolic-ref", "--short", "-q", "HEAD"])
+        if current.ok, current.stdout.trimmingCharacters(in: .whitespacesAndNewlines) == branch { return }
+        // Unborn HEAD (no commits yet): just rename the branch pointer.
+        let headExists = try await git(["rev-parse", "--verify", "HEAD"])
+        if !headExists.ok {
+            _ = try await git(["symbolic-ref", "HEAD", "refs/heads/\(branch)"])
+            return
+        }
+        if branch == "HEAD" { return } // detached at an odd ref — leave the tree alone
+        let exists = try await git(["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"])
+        if exists.ok {
+            _ = try await git(["checkout", "-q", branch])
+        } else {
+            _ = try await git(["checkout", "-q", "-b", branch])
+        }
     }
 
     private func safeBranch() -> String {
@@ -823,6 +914,8 @@ final class GitSyncService: ObservableObject {
     // MARK: - Commit / pull / push
 
     /// Stage everything and commit if the worktree is dirty. Returns whether a commit was made.
+    /// A missing git identity is seeded from ProcessInfo (never a `nexus@localhost`
+    /// placeholder) so commits carry a real author.
     @discardableResult
     func commitLocalChanges(message: String) async throws -> Bool {
         guard settings.enabled, let vaultRoot else { throw GitError.noVault }
@@ -846,8 +939,14 @@ final class GitSyncService: ObservableObject {
             // Author identity may be missing — set a neutral fallback locally.
             if commit.stderr.localizedCaseInsensitiveContains("Please tell me who you are")
                 || commit.stderr.localizedCaseInsensitiveContains("author identity") {
-                _ = try? await git(["config", "user.name", "Nexus"])
-                _ = try? await git(["config", "user.email", "nexus@localhost"])
+                let info = ProcessInfo.processInfo
+                let name = info.userName.isEmpty ? "Nexus" : info.userName
+                let host = info.hostName.isEmpty ? "localhost" : info.hostName
+                var seeded = settings
+                seeded.authorName = name
+                seeded.authorEmail = "\(name)@\(host)"
+                saveSettings(seeded)
+                await ensureLocalIdentity(at: vaultRoot)
                 let retry = try await git(["commit", "-m", message])
                 if !retry.ok {
                     throw GitError.commandFailed("commit", retry.stderr)

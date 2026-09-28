@@ -71,6 +71,7 @@
 		8BE820E6235A20DC746C6F6F /* KaTeX_Fraktur-Bold.woff in Resources */ = {isa = PBXBuildFile; fileRef = B842552C83CBAF63F54442CF /* KaTeX_Fraktur-Bold.woff */; };
 		8D529651683C4DFDE4494281 /* GitSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97902CAD24F6003AA55FD1F6 /* GitSyncService.swift */; };
 		8DF5A5980266C58014755365 /* KaTeX_SansSerif-Italic.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 76C7CAB28C4C0D44E0E0D13D /* KaTeX_SansSerif-Italic.ttf */; };
+		8F3F2BF3504CFD5C8B035942 /* SyncE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A8DD31037A57677C62E7A72 /* SyncE2ETests.swift */; };
 		9CE56764FB662315F84812AF /* KaTeX_SansSerif-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 0400FE2A88D12D8129065056 /* KaTeX_SansSerif-Regular.ttf */; };
 		9D92A8DB7876D49FA35279FC /* KaTeX_Size2-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 6431E27C806B88053EC4FA83 /* KaTeX_Size2-Regular.ttf */; };
 		9D9C67E2EFDD77E3DFFD047E /* KaTeX_Main-BoldItalic.woff2 in Resources */ = {isa = PBXBuildFile; fileRef = 1E70771E9FB8E8960E2B4F6D /* KaTeX_Main-BoldItalic.woff2 */; };
@@ -171,6 +172,7 @@
 		77D23805B760ADB992B5CB8E /* KaTeX_Size3-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "KaTeX_Size3-Regular.ttf"; sourceTree = "<group>"; };
 		7818F3F101360DB9BB7ADF59 /* KaTeX_Fraktur-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "KaTeX_Fraktur-Bold.ttf"; sourceTree = "<group>"; };
 		82D0FD0F017053CA7E9E4762 /* KaTeX_SansSerif-Italic.woff2 */ = {isa = PBXFileReference; path = "KaTeX_SansSerif-Italic.woff2"; sourceTree = "<group>"; };
+		8A8DD31037A57677C62E7A72 /* SyncE2ETests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncE2ETests.swift; sourceTree = "<group>"; };
 		8DF45D33BA975AED54766B52 /* VaultService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultService.swift; sourceTree = "<group>"; };
 		8E4404E8B1B951DCF1B4127D /* KaTeX_Typewriter-Regular.woff */ = {isa = PBXFileReference; path = "KaTeX_Typewriter-Regular.woff"; sourceTree = "<group>"; };
 		8EBA94259A398581C0688E31 /* KaTeX_Size2-Regular.woff */ = {isa = PBXFileReference; path = "KaTeX_Size2-Regular.woff"; sourceTree = "<group>"; };
@@ -280,6 +282,7 @@
 				09FB6080A391166085E6DDE9 /* EndToEndTests.swift */,
 				6B26C1B65064D037CCAB816A /* MarkdownParserTests.swift */,
 				2F147C09D6EE28E224B0A27C /* MemoryStressTests.swift */,
+				8A8DD31037A57677C62E7A72 /* SyncE2ETests.swift */,
 			);
 			path = NexusTests;
 			sourceTree = "<group>";
@@ -691,6 +694,7 @@
 				65A6D7A76F9EA036FFD46838 /* EndToEndTests.swift in Sources */,
 				8B50A0676A81CB6FE8508B0B /* MarkdownParserTests.swift in Sources */,
 				71DB8C73BBB8E1787E682CDF /* MemoryStressTests.swift in Sources */,
+				8F3F2BF3504CFD5C8B035942 /* SyncE2ETests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -46,7 +46,11 @@ enum SyncSmoke {
             sync.attach(vaultRoot: url)
             // Give the vault's FSEvents bootstrap a moment to settle, then run one cycle.
             try? await Task.sleep(nanoseconds: 1_500_000_000)
-            await sync.syncNow()
+            if let remoteOverride, GitRemote.parse(remoteOverride) != nil {
+                await sync.syncOnce(remoteOverride: remoteOverride)
+            } else {
+                await sync.syncNow()
+            }
             var report: [String: String] = [
                 "vault": url.path,
                 "phase": sync.status.phase.rawValue,
