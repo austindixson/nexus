@@ -14,9 +14,8 @@ final class SyncE2ETests: XCTestCase {
         vault = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("nexus-sync-vault-\(UUID().uuidString.prefix(8))", isDirectory: true)
         remote = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("nexus-sync-remote-\(UUID().uuidString.prefix(8))", isDirectory: true)
+            .appendingPathComponent("nexus-sync-remote-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
-        try FileManager.default.createDirectory(at: remote, withIntermediateDirectories: true)
         try "seed".write(to: vault.appendingPathComponent("Welcome.md"), atomically: true, encoding: .utf8)
     }
 
@@ -213,6 +212,94 @@ final class SyncE2ETests: XCTestCase {
     }
 
     @MainActor
+    func testSidecarsStayUntrackedAfterEnableAndMutation() async throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else {
+            throw XCTSkip("git CLI not installed on this runner")
+        }
+        // A vault that is ALREADY a git repo (sync enabled onto a pre-existing
+        // repo): the machine-local sidecars must never become tracked.
+        let initProc = Process()
+        initProc.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        initProc.arguments = ["init", "-b", "main", vault.path]
+        initProc.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin"]
+        try initProc.run(); initProc.waitUntilExit()
+        try "seed".write(to: vault.appendingPathComponent("Seed.md"), atomically: true, encoding: .utf8)
+        _ = runGitSync(["add", "-A"], at: vault)
+        _ = runGitSync(["-c", "user.name=T", "-c", "user.email=t@e.invalid", "commit", "-m", "seed"], at: vault)
+
+        let remote = try makeBareRemote()
+
+        let sync = GitSyncService.shared
+        sync.resetPersistedSettingsForTesting()
+        var settings = sync.settings
+        settings.branch = "main"
+        settings.authorName = "Sync Tests"
+        settings.authorEmail = "tests@example.invalid"
+        settings.keychainAccount = ""
+        sync.saveSettings(settings)
+        sync.attach(vaultRoot: vault)
+        sync.enableSync(remoteRaw: remote.path)
+        for _ in 0..<200 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            if !sync.status.isBusy { break }
+        }
+
+        // Sidecars must never be tracked. After enable, .gitignore exists and
+        // `git add -A` (what every cycle runs) must leave the sidecars out.
+        let ignored = runGitSync(["check-ignore", "-q", ".nexus/sync.json"], at: vault)
+        XCTAssertEqual(ignored.code, 0, ".gitignore must cover .nexus/")
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent(".nexus"), withIntermediateDirectories: true)
+        try "{\"enabled\":true}".write(
+            to: vault.appendingPathComponent(".nexus/sync.json"), atomically: true, encoding: .utf8)
+        _ = runGitSync(["add", "-A"], at: vault)
+        let staged = runGitSync(["diff", "--cached", "--name-only"], at: vault)
+        XCTAssertFalse(staged.stdout.contains(".nexus/"),
+                       "add -A staged sidecars: \(staged.stdout)")
+        let tracked = runGitSync(["ls-files"], at: vault)
+        XCTAssertFalse(tracked.stdout.contains(".nexus/"),
+                       "sidecar tracked by git: \(tracked.stdout)")
+    }
+
+    @MainActor
+    func testPullBlockedKeepsPendingAndLocalCommit() async throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else {
+            throw XCTSkip("git CLI not installed on this runner")
+        }
+        let remote = try makeBareRemote()
+
+        let sync = GitSyncService.shared
+        sync.resetPersistedSettingsForTesting()
+        var settings = sync.settings
+        settings.branch = "main"
+        settings.authorName = "Sync Tests"
+        settings.authorEmail = "tests@example.invalid"
+        settings.keychainAccount = ""
+        sync.saveSettings(settings)
+        sync.attach(vaultRoot: vault)
+        sync.enableSync(remoteRaw: remote.path)
+        for _ in 0..<200 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            if !sync.status.isBusy { break }
+        }
+
+        // A user edits a file behind Nexus' back *during* the enable window.
+        // Nexus must commit it, and if a later pull would be blocked, the local
+        // commit must survive and the remote must still receive history.
+        try "# user edit\n".write(to: vault.appendingPathComponent("User.md"), atomically: true, encoding: .utf8)
+        await sync.syncNow()
+
+        let log = runGitSync(["log", "--oneline", "--all"], at: vault)
+        XCTAssertTrue(log.stdout.contains("nexus: sync"), "user edit must be committed: \(log.stdout)")
+        let remoteLog = runGitSync(["log", "--oneline", "--all"], at: remote)
+        XCTAssertTrue(remoteLog.stdout.contains("nexus: sync"),
+                      "history must reach the remote: \(remoteLog.stdout)")
+        // The committed user file must be present in the pushed tree.
+        let tree = runGitSync(["show", "main:User.md"], at: remote)
+        XCTAssertEqual(tree.code, 0, "User.md missing from remote tree")
+    }
+
+    @MainActor
     func testInvalidRemoteDoesNotHalfEnable() async throws {
         let sync = GitSyncService.shared
         sync.resetPersistedSettingsForTesting()
@@ -230,6 +317,19 @@ final class SyncE2ETests: XCTestCase {
         XCTAssertFalse(sync.settings.enabled, "invalid remote must never flip enabled")
         XCTAssertEqual(sync.status.phase, .error)
         XCTAssertNotNil(sync.status.lastError)
+    }
+
+    /// Create a unique bare repo (git CLI) and return its path.
+    private func makeBareRemote() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nexus-sync-remote-\(UUID().uuidString)")
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        p.arguments = ["init", "--bare", "-b", "main", dir.path]
+        p.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin"]
+        try p.run(); p.waitUntilExit()
+        XCTAssertEqual(p.terminationStatus, 0, "bare init failed")
+        return dir
     }
 
     // MARK: - Process helpers

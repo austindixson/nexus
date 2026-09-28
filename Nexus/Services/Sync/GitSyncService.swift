@@ -184,6 +184,10 @@ final class GitSyncService: ObservableObject {
     /// Wipe persisted sync settings (tests + "reset sync" affordances).
     func resetPersistedSettingsForTesting() {
         UserDefaults.standard.removeObject(forKey: defaultsKey)
+        // Drop any per-vault sidecar so tests (and re-enables) start clean.
+        if let vaultRoot {
+            try? fm.removeItem(at: vaultRoot.appendingPathComponent(".nexus", isDirectory: true))
+        }
         settings = SyncSettings()
         status = SyncStatus()
         settingsRevision += 1
@@ -535,10 +539,6 @@ final class GitSyncService: ObservableObject {
                     _ = try await runGit(["symbolic-ref", "HEAD", "refs/heads/\(safeBranch())"], at: vaultRoot)
                 }
             }
-            // Safety ignore runs on every re-enable too: an existing repo (e.g. an
-            // iCloud vault the user already versioned) would otherwise track the
-            // machine-local sidecars in .nexus/.
-            try writeSafetyGitignore(at: vaultRoot)
             await ensureLocalIdentity(at: vaultRoot)
             // The identity must exist *before* the first commit or git refuses with
             // "Please tell me who you are". Settings are the authoritative source.
@@ -575,8 +575,17 @@ final class GitSyncService: ObservableObject {
                 status.lastAction = "Pulling initial history…"
                 try await pull(rebase: true)
             }
+            // The safety ignore and sidecar cleanup must land *before* the first
+            // commit: otherwise .nexus/ sidecars get tracked (and every later
+            // `pull --rebase` then refuses to run over them).
+            try writeSafetyGitignore(at: vaultRoot)
+            await untrackLocalSidecars(at: vaultRoot)
             status.lastAction = "Committing current vault…"
             try await commitLocalChanges(message: "nexus: enable sync \(Self.stamp())")
+            // The very first commit of a pre-existing repo switches HEAD to the
+            // configured branch; a cycle started during that switch used to see
+            // "src refspec main does not match any".
+            try await ensureHeadOnConfiguredBranch(at: vaultRoot)
             status.lastAction = "Pushing…"
             try await push()
             status.phase = .idle
@@ -610,16 +619,22 @@ final class GitSyncService: ObservableObject {
         guard !cycleLock else { return }
         cycleLock = true
         defer { cycleLock = false }
+        let hadPending = pendingChanges
         do {
             await ensureLocalIdentity(at: vaultRoot)
             try await ensureRemoteConfigured(at: vaultRoot)
-            // Committing on a foreign/detached HEAD produces commits the push
-            // can't deliver — switch to the configured branch first.
+            // Switch to the configured branch BEFORE committing: commits made on a
+            // detached or foreign HEAD cannot be pushed.
             try await ensureHeadOnConfiguredBranch(at: vaultRoot)
             // Commit first: `git pull --rebase` refuses to run over an unclean
             // worktree, so local edits must be committed before we integrate remote
             // commits.
             let dirty = try await commitLocalChanges(message: "nexus: sync \(Self.stamp())")
+            // The user's uncommitted work is safely committed (or there was
+            // nothing to do) — only now is it correct to clear the pending flag.
+            if hadPending && (dirty || status.dirtyCount == 0) {
+                pendingChanges = false
+            }
             status.phase = .pulling
             status.lastAction = dirty ? "Pushing local changes…" : "Pulling…"
             try await pull(rebase: true)
@@ -642,6 +657,9 @@ final class GitSyncService: ObservableObject {
         } catch {
             status.phase = .error
             status.lastError = error.localizedDescription
+            // Keep pendingChanges when a pull was blocked: the local commit exists
+            // and must reach the remote on the next cycle.
+            await refreshCounts(at: vaultRoot)
         }
     }
 
@@ -886,6 +904,22 @@ final class GitSyncService: ObservableObject {
         return b.isEmpty ? "main" : b
     }
 
+    /// Drop the machine-local `.nexus/` sidecars from the index if an earlier
+    /// build tracked them. Their presence makes `pull --rebase` refuse to run,
+    /// and they must never reach the remote. Runs before any commit.
+    private func untrackLocalSidecars(at vaultRoot: URL) async {
+        let listed = try? await git(["ls-files", "--", ".nexus"])
+        guard let listed, listed.ok else { return }
+        let paths = listed.stdout
+            .split(separator: "\n")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        guard !paths.isEmpty else { return }
+        _ = try? await git(["rm", "-r", "--cached", "--", ".nexus"])
+        // Leave a working-tree copy behind if the user's files are still there.
+        try? writeSafetyGitignore(at: vaultRoot)
+    }
+
     private func safeBranchForArg() -> String {
         // Branch names: letters, digits, dot, dash, underscore, slash.
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-_"))
@@ -939,6 +973,10 @@ final class GitSyncService: ObservableObject {
     @discardableResult
     func commitLocalChanges(message: String) async throws -> Bool {
         guard settings.enabled, let vaultRoot else { throw GitError.noVault }
+        // Ignore rules and sidecar cleanup run before the dirty check so a
+        // machine-local sidecar never shows up as a user change.
+        try? writeSafetyGitignore(at: vaultRoot)
+        await untrackLocalSidecars(at: vaultRoot)
         let before = try await git(["status", "--porcelain"])
         guard before.ok else {
             throw GitError.commandFailed("status", before.stderr)
@@ -993,6 +1031,17 @@ final class GitSyncService: ObservableObject {
         // The remote branch may not exist yet (first-ever push) — nothing to pull.
         if combined.contains("couldn't find remote ref") || combined.contains("no such ref") {
             return
+        }
+        // Rebase refused to start over an unclean worktree (or a conflicted rebase
+        // is already in progress). Never stash and never lose user work.
+        if combined.contains("cannot pull with rebase")
+            || combined.contains("you have unstaged changes")
+            || combined.contains("you have uncommitted changes")
+            || combined.contains("unstaged changes")
+            || (combined.contains("cannot lock ref") && combined.contains("rebase")) {
+            throw GitError.pullBlocked(
+                "The vault has uncommitted changes outside Nexus' control, so the\nrebase was skipped. Your vault is untouched — commit or revert the\nchanges in the vault folder (or turn sync off and edit manually)."
+            )
         }
         // Conflicted rebase: abort so we never leave the repo mid-rebase, and
         // surface the conflict to the user instead of guessing a side.
@@ -1256,6 +1305,7 @@ final class GitSyncService: ObservableObject {
         case conflict(String)
         case authFailed
         case unreachable
+        case pullBlocked(String)
 
         var errorDescription: String? {
             switch self {
@@ -1271,6 +1321,7 @@ final class GitSyncService: ObservableObject {
                 return "Authentication failed. Check the token in Settings → Sync (or ssh-agent for ssh:// remotes)."
             case .unreachable:
                 return "Remote is unreachable. Check the network, the remote URL, or whether the server is running."
+            case .pullBlocked(let s): return s
             }
         }
     }
