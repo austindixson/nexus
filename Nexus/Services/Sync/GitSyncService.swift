@@ -986,8 +986,11 @@ final class GitSyncService: ObservableObject {
                 "Pull produced conflicts. Rebase aborted; your local commits are intact. Resolve in Settings → Sync."
             )
         }
-        lastGitErrorRaw = "pull: " + result.stderr
-        throw GitError.commandFailed("pull", result.stderr)
+        // Include stdout: git writes most diagnostics ("Cannot rebase", "You have
+        // unstaged changes") to stdout; stderr alone is often empty.
+        lastGitErrorRaw = "pull: " + (result.stderr + " " + result.stdout)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        throw GitError.commandFailed("pull", result.stderr.isEmpty ? result.stdout : result.stderr)
     }
 
     /// `git status --porcelain` lines with unmerged codes (DD/AU/UU/AA/DU/UA…).
@@ -1031,8 +1034,9 @@ final class GitSyncService: ObservableObject {
             }
             throw GitError.commandFailed("push", rebase.stderr)
         }
-        lastGitErrorRaw = "push: " + result.stderr
-        throw GitError.commandFailed("push", result.stderr)
+        lastGitErrorRaw = "push: " + (result.stderr + " " + result.stdout)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        throw GitError.commandFailed("push", result.stderr.isEmpty ? result.stdout : result.stderr)
     }
 
     // MARK: - Counts / conflicts
