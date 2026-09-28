@@ -17,6 +17,7 @@
 		0EAD7180628F5749A9F05DA6 /* KaTeX_AMS-Regular.woff in Resources */ = {isa = PBXBuildFile; fileRef = 08C8013E3AB30C1280A4C96F /* KaTeX_AMS-Regular.woff */; };
 		0F898AC5EBD673CEC29D4691 /* SyncSidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23524E0E027AEEAEE2BDFB48 /* SyncSidebarView.swift */; };
 		13906E2DC43C98C8334C4B96 /* KaTeX_Size1-Regular.woff in Resources */ = {isa = PBXBuildFile; fileRef = A60E1B1F1592F7471C3B9D84 /* KaTeX_Size1-Regular.woff */; };
+		13C079BFB6B2A2843586AE4E /* SyncSmoke.swift in Sources */ = {isa = PBXBuildFile; fileRef = E15CD881EBC3BE79CE40A13B /* SyncSmoke.swift */; };
 		185803BCDC448F11F0EB2E4F /* KaTeX_Typewriter-Regular.woff2 in Resources */ = {isa = PBXBuildFile; fileRef = 6088457605838DD8F7158372 /* KaTeX_Typewriter-Regular.woff2 */; };
 		260AE912FE07F480F4822CCE /* KaTeX_Main-BoldItalic.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B0F9232E37ED2D077A6FF5A8 /* KaTeX_Main-BoldItalic.ttf */; };
 		27AA8BFEB285D83F48355F4C /* KaTeX_SansSerif-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 2D6E55E9EC9019373C520F68 /* KaTeX_SansSerif-Bold.ttf */; };
@@ -210,6 +211,7 @@
 		DFA3622A6831CD4127AC4612 /* KaTeX_Main-Italic.woff2 */ = {isa = PBXFileReference; path = "KaTeX_Main-Italic.woff2"; sourceTree = "<group>"; };
 		DFB57CBA083612C76470248D /* KaTeX_Size1-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "KaTeX_Size1-Regular.ttf"; sourceTree = "<group>"; };
 		E041ED7490966AAB25B6AA89 /* KaTeX_Script-Regular.woff2 */ = {isa = PBXFileReference; path = "KaTeX_Script-Regular.woff2"; sourceTree = "<group>"; };
+		E15CD881EBC3BE79CE40A13B /* SyncSmoke.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSmoke.swift; sourceTree = "<group>"; };
 		E2A658C1DD0F53D4D5EFA220 /* SyncSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettingsView.swift; sourceTree = "<group>"; };
 		E56F62E1301A69509ECF63B5 /* KaTeX_Script-Regular.woff */ = {isa = PBXFileReference; path = "KaTeX_Script-Regular.woff"; sourceTree = "<group>"; };
 		E70E2149EEEF4C1EDD708E94 /* KaTeX_Math-BoldItalic.woff */ = {isa = PBXFileReference; path = "KaTeX_Math-BoldItalic.woff"; sourceTree = "<group>"; };
@@ -456,6 +458,7 @@
 				967AB9A3C498E00296350BED /* AskpassHelper.swift */,
 				9908A220F94AA4AD7228B798 /* GitRemote.swift */,
 				97902CAD24F6003AA55FD1F6 /* GitSyncService.swift */,
+				E15CD881EBC3BE79CE40A13B /* SyncSmoke.swift */,
 			);
 			path = Sync;
 			sourceTree = "<group>";
@@ -728,6 +731,7 @@
 				CBC5F472323EEB319075DBEE /* StudioService.swift in Sources */,
 				D1B43CC2B1BC6F06C8B0897D /* SyncSettingsView.swift in Sources */,
 				0F898AC5EBD673CEC29D4691 /* SyncSidebarView.swift in Sources */,
+				13C079BFB6B2A2843586AE4E /* SyncSmoke.swift in Sources */,
 				80B6C76459F5944ECDFAD0A9 /* VaultIndexStore.swift in Sources */,
 				4813659D8CA08A571EBEA9BA /* VaultService.swift in Sources */,
 				CF6296D79E669A235329B746 /* WorkspaceService.swift in Sources */,

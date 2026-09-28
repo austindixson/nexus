@@ -11,6 +11,14 @@ struct NexusApp: App {
             RootView()
                 .environmentObject(appState)
                 .frame(minWidth: 960, minHeight: 640)
+                .task {
+                    // CLI smoke mode: parse args, run one sync cycle headlessly, exit.
+                    let args = CommandLine.arguments
+                    if let idx = args.firstIndex(of: "--sync-smoke"), args.count > idx + 1 {
+                        SyncSmoke.extraArguments = Array(args[(idx + 2)...])
+                        SyncSmoke.run(vaultPath: args[idx + 1])
+                    }
+                }
         }
         .defaultSize(width: 1280, height: 840)
         .windowStyle(.titleBar)

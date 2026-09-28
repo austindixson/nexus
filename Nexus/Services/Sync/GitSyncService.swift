@@ -562,11 +562,11 @@ final class GitSyncService: ObservableObject {
             try await push()
             status.phase = .idle
             status.lastSyncAt = Date()
-            status.lastAction = "Synced \(Self.stamp())"
             status.lastError = nil
             pendingChanges = false
-            refreshCounts(at: vaultRoot)
+            await refreshCounts(at: vaultRoot)
             status.conflictPaths = conflictCopyPaths()
+            status.lastAction = "Synced \(Self.stamp())"
         } catch {
             status.phase = .error
             status.lastError = error.localizedDescription
@@ -852,12 +852,12 @@ final class GitSyncService: ObservableObject {
                 if !retry.ok {
                     throw GitError.commandFailed("commit", retry.stderr)
                 }
-                refreshCounts(at: vaultRoot)
+                await refreshCounts(at: vaultRoot)
                 return true
             }
             throw GitError.commandFailed("commit", commit.stderr)
         }
-        refreshCounts(at: vaultRoot)
+        await refreshCounts(at: vaultRoot)
         return true
     }
 
@@ -934,19 +934,19 @@ final class GitSyncService: ObservableObject {
 
     // MARK: - Counts / conflicts
 
-    func refreshCounts(at vaultRoot: URL) {
-        Task {
-            guard let branch = try? await currentBranch() else { return }
-            let ahead = try? await git(["rev-list", "--count", "origin/\(branch)..HEAD"])
-            let behind = try? await git(["rev-list", "--count", "HEAD..origin/\(branch)"])
-            let statusRes = try? await git(["status", "--porcelain"])
-            await MainActor.run {
-                if let ahead, ahead.ok { self.status.aheadCount = Int(ahead.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0 }
-                if let behind, behind.ok { self.status.behindCount = Int(behind.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0 }
-                if let statusRes, statusRes.ok {
-                    self.status.dirtyCount = statusRes.stdout.split(separator: "\n").filter { !$0.isEmpty }.count
-                }
-            }
+    /// Ahead/behind/dirty counts. Fetches first so `origin/<branch>` is current —
+    /// otherwise counts stay stale right after a successful push/pull.
+    func refreshCounts(at vaultRoot: URL) async {
+        guard let branch = try? await currentBranch() else { return }
+        // Cheap update of remote refs (best effort; ignore failures).
+        _ = try? await git(["fetch", "--quiet", "origin", branch])
+        let ahead = try? await git(["rev-list", "--count", "origin/\(branch)..HEAD"])
+        let behind = try? await git(["rev-list", "--count", "HEAD..origin/\(branch)"])
+        let statusRes = try? await git(["status", "--porcelain"])
+        if let ahead, ahead.ok { self.status.aheadCount = Int(ahead.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0 }
+        if let behind, behind.ok { self.status.behindCount = Int(behind.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0 }
+        if let statusRes, statusRes.ok {
+            self.status.dirtyCount = statusRes.stdout.split(separator: "\n").filter { !$0.isEmpty }.count
         }
     }
 
@@ -1073,7 +1073,7 @@ final class GitSyncService: ObservableObject {
                 }
             }
         }
-        refreshCounts(at: vaultRoot)
+        await refreshCounts(at: vaultRoot)
         status.conflictPaths = conflictCopyPaths()
     }
 
