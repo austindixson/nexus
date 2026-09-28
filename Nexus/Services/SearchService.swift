@@ -10,8 +10,14 @@ struct SearchHit: Identifiable, Hashable {
 }
 
 /// Instant vault search with Obsidian-like operators: path:, tag:, file:, content defaults.
+/// Uses SQLite FTS5 when available, falls back to in-memory scan.
 enum SearchService {
-    static func search(query: String, notes: [String: NoteDocument], limit: Int = 200) -> [SearchHit] {
+    static func search(
+        query: String,
+        notes: [String: NoteDocument],
+        limit: Int = 200,
+        index: VaultIndexStore? = nil
+    ) -> [SearchHit] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 
@@ -33,6 +39,54 @@ enum SearchService {
             }
         }
 
+        // FTS path when we have pure content terms (operators still applied after)
+        if let index, !terms.isEmpty {
+            let ftsQuery = terms.joined(separator: " ")
+            var hits: [SearchHit] = []
+            for fts in index.searchFTS(query: ftsQuery, limit: limit * 2) {
+                guard let note = notes[fts.path] else {
+                    // Index may be ahead of memory briefly
+                    if let pathFilter, !fts.path.localizedCaseInsensitiveContains(pathFilter) { continue }
+                    if let fileFilter {
+                        let name = (fts.path as NSString).lastPathComponent
+                        if !name.localizedCaseInsensitiveContains(fileFilter) { continue }
+                    }
+                    hits.append(SearchHit(
+                        id: fts.path + fts.snippet,
+                        path: fts.path,
+                        title: fts.title,
+                        snippet: fts.snippet,
+                        score: fts.rank + 10,
+                        line: nil
+                    ))
+                    continue
+                }
+                if let pathFilter, !fts.path.localizedCaseInsensitiveContains(pathFilter) { continue }
+                if let fileFilter {
+                    let name = (fts.path as NSString).lastPathComponent
+                    if !name.localizedCaseInsensitiveContains(fileFilter) { continue }
+                }
+                if let tagFilter {
+                    if !note.tags.contains(where: {
+                        $0.localizedCaseInsensitiveCompare(tagFilter) == .orderedSame
+                            || $0.localizedCaseInsensitiveContains(tagFilter)
+                    }) { continue }
+                }
+                hits.append(SearchHit(
+                    id: fts.path + fts.snippet,
+                    path: fts.path,
+                    title: note.title,
+                    snippet: fts.snippet.isEmpty ? String(note.content.prefix(100)) : fts.snippet,
+                    score: fts.rank + 10,
+                    line: nil
+                ))
+            }
+            if !hits.isEmpty {
+                return Array(hits.sorted { $0.score > $1.score }.prefix(limit))
+            }
+        }
+
+        // In-memory fallback / operator-only queries
         var hits: [SearchHit] = []
 
         for (path, note) in notes {

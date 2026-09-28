@@ -220,6 +220,7 @@ enum RightSidebarTab: String, CaseIterable, Identifiable {
     case backlinks
     case outgoing
     case properties
+    case ask
 
     var id: String { rawValue }
 
@@ -228,6 +229,7 @@ enum RightSidebarTab: String, CaseIterable, Identifiable {
         case .backlinks: return "Backlinks"
         case .outgoing: return "Outgoing"
         case .properties: return "Properties"
+        case .ask: return "Ask Nexus"
         }
     }
 
@@ -236,6 +238,7 @@ enum RightSidebarTab: String, CaseIterable, Identifiable {
         case .backlinks: return "link"
         case .outgoing: return "arrow.up.right"
         case .properties: return "doc.text"
+        case .ask: return "sparkles"
         }
     }
 }

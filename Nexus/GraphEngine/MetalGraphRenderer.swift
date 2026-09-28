@@ -6,18 +6,19 @@ import AppKit
 import simd
 
 /// GPU-accelerated node/edge drawer for the graph view.
+/// - Nodes: point sprites (instanced-style single buffer draw)
+/// - Edges: **triangle quads** for true thickness (not hairlines)
 /// CPU force layout stays in `ForceSimulator`; this only paints.
-/// Falls back gracefully when Metal is unavailable.
 final class MetalGraphRenderer {
     private(set) var isAvailable = false
 
     private var device: MTLDevice?
     private var queue: MTLCommandQueue?
     private var pipelinePoints: MTLRenderPipelineState?
-    private var pipelineLines: MTLRenderPipelineState?
+    private var pipelineTris: MTLRenderPipelineState?
     private var metalLayer: CAMetalLayer?
 
-    /// Packed layout matching Metal `VertexBuf` (no Swift padding surprises).
+    /// Packed layout matching Metal `VertexBuf`.
     private struct Vertex {
         var x: Float
         var y: Float
@@ -53,9 +54,9 @@ final class MetalGraphRenderer {
             desc.fragmentFunction = library.makeFunction(name: "fragment_main")
             pipelinePoints = try device.makeRenderPipelineState(descriptor: desc)
 
-            desc.vertexFunction = library.makeFunction(name: "vertex_line")
+            desc.vertexFunction = library.makeFunction(name: "vertex_solid")
             desc.fragmentFunction = library.makeFunction(name: "fragment_solid")
-            pipelineLines = try device.makeRenderPipelineState(descriptor: desc)
+            pipelineTris = try device.makeRenderPipelineState(descriptor: desc)
 
             isAvailable = true
         } catch {
@@ -78,7 +79,6 @@ final class MetalGraphRenderer {
         layer.frame = view.bounds
         layer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
         view.wantsLayer = true
-        // Keep under any future overlays; we draw labels with CoreGraphics after present if needed.
         if let existing = view.layer {
             existing.addSublayer(layer)
         } else {
@@ -98,11 +98,11 @@ final class MetalGraphRenderer {
         )
     }
 
-    // Reused CPU vertex scratch (avoids realloc thrash on large graphs).
-    private var lineScratch: [Vertex] = []
+    private var triScratch: [Vertex] = []
     private var pointScratch: [Vertex] = []
+    /// Cap triangle vertices (~6 per edge) for huge graphs — LOD keeps top-weight edges.
+    private let maxEdgeQuads = 6_000
 
-    /// Draw edges + nodes into the Metal layer. Returns false if Metal path unavailable.
     @discardableResult
     func draw(
         nodes: [GraphViewModel.RenderNode],
@@ -117,7 +117,7 @@ final class MetalGraphRenderer {
         guard isAvailable,
               let metalLayer,
               let queue,
-              let pipelineLines,
+              let pipelineTris,
               let pipelinePoints,
               let drawable = metalLayer.nextDrawable()
         else { return false }
@@ -130,7 +130,6 @@ final class MetalGraphRenderer {
         let oy = Float(viewSize.height / 2 + offset.height)
         let s = Float(scale)
         let fade = hovered != nil
-        // Viewport cull margin in screen px (keep edges that clip the frame).
         let margin: Float = 40
         let minX: Float = -margin
         let maxX: Float = width + margin
@@ -155,13 +154,19 @@ final class MetalGraphRenderer {
             p.x >= minX && p.x <= maxX && p.y >= minY && p.y <= maxY
         }
 
-        // Edges — index lookup + frustum cull (both endpoints off-screen ⇒ skip).
-        lineScratch.removeAll(keepingCapacity: true)
-        lineScratch.reserveCapacity(min(edges.count, 8_000) * 2)
-        let edgeR: Float = 0.75
-        let edgeG: Float = 0.75
-        let edgeB: Float = 0.75
+        // --- Edges as thick quads (2 triangles = 6 verts) ---
+        triScratch.removeAll(keepingCapacity: true)
+        let edgeBudget = min(edges.count, maxEdgeQuads)
+        triScratch.reserveCapacity(edgeBudget * 6)
+
+        let baseHalfWidth = max(0.35, Float(linkThickness) * 0.55) // screen px half-thickness
+        let edgeR: Float = 0.72
+        let edgeG: Float = 0.74
+        let edgeB: Float = 0.78
+
+        var drawnEdges = 0
         for edge in edges {
+            if drawnEdges >= maxEdgeQuads { break }
             let si = edge.sourceIndex
             let ti = edge.targetIndex
             guard si >= 0, ti >= 0, si < nodes.count, ti < nodes.count else { continue }
@@ -170,29 +175,52 @@ final class MetalGraphRenderer {
             let sp = project(a.x, a.y)
             let tp = project(b.x, b.y)
             if !inView(sp), !inView(tp) {
-                // Cheap reject: both ends outside the same half-plane.
                 if (sp.x < minX && tp.x < minX) || (sp.x > maxX && tp.x > maxX)
                     || (sp.y < minY && tp.y < minY) || (sp.y > maxY && tp.y > maxY) {
                     continue
                 }
             }
-            var alpha: Float = 0.22
+
+            // Keep non-focus edges readable — heavy dim made unhover feel like the map "exploded".
+            var alpha: Float = 0.28
             if fade {
                 if let h = hovered, edge.source == h || edge.target == h {
-                    alpha = 0.75
+                    alpha = 0.9
                 } else {
-                    alpha = 0.04
+                    alpha = 0.12
                 }
             }
-            // Slight thickness cue for multi-links without extra geometry.
-            alpha = min(1, alpha * Float(0.85 + min(edge.weight, 3) * 0.08 * linkThickness))
-            let p1 = ndc(sp)
-            let p2 = ndc(tp)
-            lineScratch.append(Vertex(x: p1.x, y: p1.y, r: edgeR, g: edgeG, b: edgeB, a: alpha, pointSize: 1))
-            lineScratch.append(Vertex(x: p2.x, y: p2.y, r: edgeR, g: edgeG, b: edgeB, a: alpha, pointSize: 1))
+            alpha = min(1, alpha * Float(0.9 + min(edge.weight, 4) * 0.06))
+
+            // Perpendicular in screen space
+            let dx = tp.x - sp.x
+            let dy = tp.y - sp.y
+            let len = max(0.001, sqrt(dx * dx + dy * dy))
+            let half = baseHalfWidth * Float(0.85 + min(edge.weight, 3) * 0.15) * max(0.7, min(1.4, s))
+            let nx = (-dy / len) * half
+            let ny = (dx / len) * half
+
+            // Quad corners in screen px → NDC
+            let s1 = ndc(SIMD2(sp.x + nx, sp.y + ny))
+            let s2 = ndc(SIMD2(sp.x - nx, sp.y - ny))
+            let t1 = ndc(SIMD2(tp.x + nx, tp.y + ny))
+            let t2 = ndc(SIMD2(tp.x - nx, tp.y - ny))
+
+            func v(_ p: SIMD2<Float>) -> Vertex {
+                Vertex(x: p.x, y: p.y, r: edgeR, g: edgeG, b: edgeB, a: alpha, pointSize: 1)
+            }
+            // Triangle 1: s1, s2, t1
+            triScratch.append(v(s1))
+            triScratch.append(v(s2))
+            triScratch.append(v(t1))
+            // Triangle 2: s2, t2, t1
+            triScratch.append(v(s2))
+            triScratch.append(v(t2))
+            triScratch.append(v(t1))
+            drawnEdges += 1
         }
 
-        // Nodes — use pre-baked RGBA (no NSColor work on the hot path).
+        // --- Nodes (single drawPrimitives — GPU batches as instanced points) ---
         pointScratch.removeAll(keepingCapacity: true)
         pointScratch.reserveCapacity(nodes.count)
         let contentsScale = Float(metalLayer.contentsScale)
@@ -202,10 +230,15 @@ final class MetalGraphRenderer {
                 if node.id == hovered || neighbors.contains(node.id) {
                     alpha = 1
                 } else {
-                    alpha = 0.12
+                    alpha = 0.55
                 }
             }
             let p = ndc(project(node.x, node.y))
+            // Skip far off-screen nodes for large vaults
+            if p.x < -1.2 || p.x > 1.2 || p.y < -1.2 || p.y > 1.2 {
+                // keep hubs (high degree) even if slightly off-screen for continuity
+                if node.degree < 8 { continue }
+            }
             let radius = max(3, node.radius * (scale < 0.5 ? 0.8 : 1))
             let pointSize = Float(radius * 2) * contentsScale
             let (r, g, bl, baseA) = node.rgba
@@ -215,7 +248,7 @@ final class MetalGraphRenderer {
             ))
         }
 
-        let lineVerts = lineScratch
+        let triVerts = triScratch
         let pointVerts = pointScratch
 
         let pass = MTLRenderPassDescriptor()
@@ -228,16 +261,14 @@ final class MetalGraphRenderer {
               let enc = cmd.makeRenderCommandEncoder(descriptor: pass)
         else { return false }
 
-        if !lineVerts.isEmpty, let buf = device?.makeBuffer(
-            bytes: lineVerts,
-            length: MemoryLayout<Vertex>.stride * lineVerts.count,
+        if !triVerts.isEmpty, let buf = device?.makeBuffer(
+            bytes: triVerts,
+            length: MemoryLayout<Vertex>.stride * triVerts.count,
             options: .storageModeShared
         ) {
-            enc.setRenderPipelineState(pipelineLines)
+            enc.setRenderPipelineState(pipelineTris)
             enc.setVertexBuffer(buf, offset: 0, index: 0)
-            // Approximate thickness via multiple draws is overkill; single hairline is fine.
-            enc.drawPrimitives(type: .line, vertexStart: 0, vertexCount: lineVerts.count)
-            _ = linkThickness
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: triVerts.count)
         }
 
         if !pointVerts.isEmpty, let buf = device?.makeBuffer(
@@ -287,8 +318,8 @@ final class MetalGraphRenderer {
         return out;
     }
 
-    vertex VertexOut vertex_line(uint vid [[vertex_id]],
-                                 const device VertexBuf *vertices [[buffer(0)]]) {
+    vertex VertexOut vertex_solid(uint vid [[vertex_id]],
+                                  const device VertexBuf *vertices [[buffer(0)]]) {
         VertexBuf v = vertices[vid];
         VertexOut out;
         out.position = float4(v.x, v.y, 0, 1);
@@ -299,15 +330,13 @@ final class MetalGraphRenderer {
 
     fragment float4 fragment_main(VertexOut in [[stage_in]],
                                   float2 pc [[point_coord]]) {
-        // Soft circular points (also used for lines — point_coord is 0..1; lines ignore shape)
         float2 c = pc - float2(0.5);
         float d = length(c);
         float alpha = in.color.a;
-        // When drawing lines, Metal still supplies point_coord; keep full alpha near center path.
         if (d > 0.5) {
             discard_fragment();
         }
-        alpha *= smoothstep(0.5, 0.3, d);
+        alpha *= smoothstep(0.5, 0.28, d);
         return float4(in.color.rgb, alpha);
     }
 

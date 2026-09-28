@@ -22,7 +22,6 @@ struct NexusApp: App {
         Settings {
             SettingsView()
                 .environmentObject(appState)
-                .frame(width: 520, height: 420)
         }
     }
 }
@@ -30,7 +29,6 @@ struct NexusApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSWindow.allowsAutomaticWindowTabbing = true
-        // Prefer dark glass aesthetic by default; user can override in Settings.
         if UserDefaults.standard.object(forKey: "nexus.appearance") == nil {
             NSApp.appearance = NSAppearance(named: .darkAqua)
         }
@@ -47,93 +45,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 struct NexusCommands: Commands {
     @ObservedObject var appState: AppState
+    @ObservedObject private var hotkeys = HotkeyService.shared
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
-            Button("New Note") {
-                appState.createNote()
-            }
-            .keyboardShortcut("n", modifiers: [.command])
+            Button("New Note") { appState.createNote() }
+                .keyboardShortcut(hotkeys.chord(for: "newNote").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "newNote").modifiers)
 
-            Button("New Folder…") {
-                appState.createFolder()
-            }
-            .keyboardShortcut("n", modifiers: [.command, .shift])
+            Button("New Folder…") { appState.createFolder() }
+                .keyboardShortcut(hotkeys.chord(for: "newFolder").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "newFolder").modifiers)
 
             Divider()
 
-            Button("Open Vault…") {
-                appState.openVaultPanel()
-            }
-            .keyboardShortcut("o", modifiers: [.command, .shift])
+            Button("Open Vault…") { appState.openVaultPanel() }
+                .keyboardShortcut(hotkeys.chord(for: "openVault").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "openVault").modifiers)
 
-            Button("Open Daily Note") {
-                appState.openDailyNote()
-            }
-            .keyboardShortcut("d", modifiers: [.command])
+            Button("Open Daily Note") { appState.openDailyNote() }
+                .keyboardShortcut(hotkeys.chord(for: "dailyNote").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "dailyNote").modifiers)
         }
 
         CommandGroup(after: .textEditing) {
-            Button("Command Palette…") {
-                appState.showCommandPalette = true
-            }
-            .keyboardShortcut("p", modifiers: [.command])
+            Button("Command Palette…") { appState.showCommandPalette = true }
+                .keyboardShortcut(hotkeys.chord(for: "commandPalette").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "commandPalette").modifiers)
 
-            Button("Quick Switcher…") {
-                appState.showQuickSwitcher = true
-            }
-            .keyboardShortcut("o", modifiers: [.command])
+            Button("Quick Switcher…") { appState.showQuickSwitcher = true }
+                .keyboardShortcut(hotkeys.chord(for: "quickSwitcher").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "quickSwitcher").modifiers)
 
-            Button("Search in Vault…") {
-                appState.focusSearch()
-            }
-            .keyboardShortcut("f", modifiers: [.command, .shift])
+            Button("Search in Vault…") { appState.focusSearch() }
+                .keyboardShortcut(hotkeys.chord(for: "searchVault").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "searchVault").modifiers)
         }
 
         CommandMenu("View") {
-            Button("Toggle Left Sidebar") {
-                appState.toggleLeftSidebar()
-            }
-            .keyboardShortcut("1", modifiers: [.command, .option])
+            Button("Toggle Left Sidebar") { appState.toggleLeftSidebar() }
+                .keyboardShortcut(hotkeys.chord(for: "toggleLeft").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "toggleLeft").modifiers)
 
-            Button("Toggle Right Sidebar") {
-                appState.toggleRightSidebar()
-            }
-            .keyboardShortcut("2", modifiers: [.command, .option])
+            Button("Toggle Right Sidebar") { appState.toggleRightSidebar() }
+                .keyboardShortcut(hotkeys.chord(for: "toggleRight").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "toggleRight").modifiers)
 
             Divider()
 
-            Button("Editor") {
-                appState.mainMode = .editor
-            }
-            .keyboardShortcut("e", modifiers: [.command, .option])
+            Button("Editor") { appState.mainMode = .editor }
+                .keyboardShortcut(hotkeys.chord(for: "modeEditor").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "modeEditor").modifiers)
 
-            Button("Graph View") {
-                appState.mainMode = .graph
-            }
-            .keyboardShortcut("g", modifiers: [.command, .option])
+            Button("Graph View") { appState.mainMode = .graph }
+                .keyboardShortcut(hotkeys.chord(for: "modeGraph").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "modeGraph").modifiers)
 
-            Button("Local Graph") {
-                appState.openLocalGraph()
-            }
-            .keyboardShortcut("g", modifiers: [.command, .option, .shift])
+            Button("Local Graph") { appState.openLocalGraph() }
+                .keyboardShortcut(hotkeys.chord(for: "modeLocalGraph").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "modeLocalGraph").modifiers)
 
-            Button("Canvas") {
-                appState.mainMode = .canvas
-            }
-            .keyboardShortcut("c", modifiers: [.command, .option])
+            Button("Canvas") { appState.mainMode = .canvas }
+                .keyboardShortcut(hotkeys.chord(for: "modeCanvas").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "modeCanvas").modifiers)
 
             Divider()
 
-            Button("Source Mode") {
-                appState.editorMode = .source
-            }
-            Button("Live Preview") {
-                appState.editorMode = .livePreview
-            }
-            Button("Split View") {
-                appState.editorMode = .split
-            }
+            Button("Source Mode") { appState.editorMode = .source }
+            Button("Live Preview") { appState.editorMode = .livePreview }
+            Button("Split View") { appState.editorMode = .split }
         }
 
         CommandMenu("Graph") {
@@ -141,15 +121,29 @@ struct NexusCommands: Commands {
                 appState.mainMode = .graph
                 appState.graphMode = .global
             }
-            Button("Local Graph") {
-                appState.openLocalGraph()
-            }
+            Button("Local Graph") { appState.openLocalGraph() }
             Divider()
-            Button("Reset Graph Camera") {
-                appState.graphResetCamera = UUID()
-            }
-            Button("Reheat Layout") {
-                appState.graphReheat = UUID()
+            Button("Reset Graph Camera") { appState.graphResetCamera = UUID() }
+            Button("Reheat Layout") { appState.graphReheat = UUID() }
+        }
+
+        CommandMenu("Nexus") {
+            Button("Ask Nexus…") { appState.focusAskNexus() }
+                .keyboardShortcut(hotkeys.chord(for: "askNexus").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "askNexus").modifiers)
+
+            Button("Import Source…") { appState.showImportSheet = true }
+                .keyboardShortcut(hotkeys.chord(for: "importSource").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "importSource").modifiers)
+
+            Divider()
+
+            Button("Rebuild Vault Index") { appState.vault.fullRescan() }
+                .keyboardShortcut(hotkeys.chord(for: "rebuildIndex").keyEquivalent,
+                                  modifiers: hotkeys.chord(for: "rebuildIndex").modifiers)
+
+            Button("Reload Plugins") {
+                Task { await appState.reloadPlugins() }
             }
         }
     }

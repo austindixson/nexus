@@ -2,11 +2,13 @@ import Foundation
 import SwiftUI
 import AppKit
 import Combine
+import simd
 
 @MainActor
 final class AppState: ObservableObject {
     let vault = VaultService()
     let linkIndex = LinkIndex()
+    let pluginHost = PluginHost()
 
     // Navigation / layout
     @Published var mainMode: MainMode = .editor
@@ -19,8 +21,11 @@ final class AppState: ObservableObject {
     @Published var showRightSidebar = true
     @Published var showCommandPalette = false
     @Published var showQuickSwitcher = false
+    @Published var showImportSheet = false
     @Published var searchQuery = ""
     @Published var focusSearchToken = UUID()
+    /// Graph node world positions restored from `.nexus/index.sqlite` (or previous session).
+    @Published var graphPositions: [String: SIMD2<Double>] = [:]
 
     // Editor buffer
     @Published var draftContent: String = ""
@@ -74,10 +79,19 @@ final class AppState: ObservableObject {
             }
             .store(in: &cancellables)
 
+        pluginHost.attach(app: self)
+
         vault.$rootURL
             .dropFirst()
-            .sink { [weak self] _ in
-                self?.restoreWorkspaceForCurrentVault()
+            .sink { [weak self] root in
+                guard let self else { return }
+                if root != nil {
+                    self.graphPositions = self.vault.indexStore?.loadGraphPositions() ?? [:]
+                } else {
+                    self.graphPositions = [:]
+                }
+                self.restoreWorkspaceForCurrentVault()
+                Task { await self.pluginHost.bootstrap(for: root) }
             }
             .store(in: &cancellables)
 
@@ -94,6 +108,7 @@ final class AppState: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             self?.restoreWorkspaceForCurrentVault()
         }
+        Task { await pluginHost.bootstrap(for: vault.rootURL) }
     }
 
     func scheduleWorkspaceSave() {
@@ -246,6 +261,22 @@ final class AppState: ObservableObject {
         leftSidebarTab = .search
         showLeftSidebar = true
         focusSearchToken = UUID()
+    }
+
+    func focusAskNexus() {
+        rightSidebarTab = .ask
+        showRightSidebar = true
+    }
+
+    func persistGraphPositions(_ positions: [String: SIMD2<Double>]) {
+        graphPositions = positions
+        // Writing `.nexus/index.sqlite` must not trigger a vault rescan / graph rebuild.
+        vault.suppressExternalReload(for: 1.5)
+        vault.indexStore?.saveGraphPositions(positions)
+    }
+
+    func reloadPlugins() async {
+        await pluginHost.bootstrap(for: vault.rootURL)
     }
 
     func openLocalGraph() {

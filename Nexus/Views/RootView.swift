@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct RootView: View {
     @EnvironmentObject private var app: AppState
@@ -26,69 +27,53 @@ struct RootView: View {
         .background(WindowAccessor())
         .animation(.easeOut(duration: 0.15), value: app.showCommandPalette)
         .animation(.easeOut(duration: 0.15), value: app.showQuickSwitcher)
+        .sheet(isPresented: $app.showImportSheet) {
+            ImportSheetView()
+                .environmentObject(app)
+        }
     }
 
+    /// Full-width chrome bar + split content. Avoids liquid-glass toolbar pills that never span the window.
     private var mainWorkspace: some View {
-        NavigationSplitView {
-            if app.showLeftSidebar {
-                LeftSidebarView()
-                    .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 420)
-            }
-        } detail: {
-            HSplitView {
-                centerPane
+        VStack(spacing: 0) {
+            NexusChromeBar()
+
+            NavigationSplitView {
+                if app.showLeftSidebar {
+                    LeftSidebarView()
+                        .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 420)
+                }
+            } detail: {
+                HSplitView {
+                    VStack(spacing: 0) {
+                        if app.mainMode == .editor && !app.openTabs.isEmpty {
+                            TabStripView()
+                        }
+                        centerPane
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                     .frame(minWidth: 420)
 
-                if app.showRightSidebar {
-                    RightSidebarView()
-                        .frame(minWidth: 220, idealWidth: 280, maxWidth: 400)
-                }
-            }
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
-                Picker("Mode", selection: $app.mainMode) {
-                    ForEach(MainMode.allCases) { mode in
-                        Label(mode.title, systemImage: icon(for: mode)).tag(mode)
+                    if app.showRightSidebar {
+                        RightSidebarView()
+                            .frame(minWidth: 240, idealWidth: 300, maxWidth: 420)
+                            .frame(maxHeight: .infinity)
                     }
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 280)
-            }
-
-            ToolbarItemGroup(placement: .primaryAction) {
-                if app.mainMode == .editor {
-                    Picker("Editor", selection: $app.editorMode) {
-                        Text("Source").tag(EditorMode.source)
-                        Text("Preview").tag(EditorMode.livePreview)
-                        Text("Split").tag(EditorMode.split)
-                    }
-                    .frame(width: 200)
-                }
-
-                Button {
-                    app.showCommandPalette = true
-                } label: {
-                    Label("Command Palette", systemImage: "command")
-                }
-                .help("Command Palette (⌘P)")
-
-                if app.vault.isIndexing {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-
-                Text("\(app.vault.noteCount) notes")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if app.mainMode == .editor && !app.openTabs.isEmpty {
-                TabStripView()
-            }
+        .background(WindowSubtitleSync(subtitle: windowSubtitle))
+    }
+
+    private var windowSubtitle: String {
+        if app.vault.isIndexing {
+            return "Indexing…"
         }
+        let n = app.vault.noteCount
+        if let name = app.vault.rootURL?.lastPathComponent {
+            return "\(name) · \(n) note\(n == 1 ? "" : "s")"
+        }
+        return "\(n) note\(n == 1 ? "" : "s")"
     }
 
     @ViewBuilder
@@ -102,36 +87,150 @@ struct RootView: View {
             CanvasView()
         }
     }
+}
 
-    private func icon(for mode: MainMode) -> String {
-        switch mode {
-        case .editor: return "doc.richtext"
-        case .graph: return "point.3.connected.trianglepath.dotted"
-        case .canvas: return "rectangle.3.group"
+// MARK: - Full-width app chrome (edge to edge)
+
+struct NexusChromeBar: View {
+    @EnvironmentObject private var app: AppState
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Sidebar toggles
+            HStack(spacing: 2) {
+                chromeIconButton(
+                    "sidebar.left",
+                    isOn: app.showLeftSidebar,
+                    help: "Toggle left sidebar"
+                ) {
+                    app.toggleLeftSidebar()
+                }
+                chromeIconButton(
+                    "sidebar.right",
+                    isOn: app.showRightSidebar,
+                    help: "Toggle right sidebar"
+                ) {
+                    app.toggleRightSidebar()
+                }
+            }
+
+            // Workspace mode — always readable width
+            Picker("Mode", selection: $app.mainMode) {
+                ForEach(MainMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 248)
+            .labelsHidden()
+            .help("Workspace mode")
+
+            Spacer(minLength: 8)
+
+            if app.mainMode == .editor {
+                Picker("Editor", selection: $app.editorMode) {
+                    Text("Source").tag(EditorMode.source)
+                    Text("Preview").tag(EditorMode.livePreview)
+                    Text("Split").tag(EditorMode.split)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 220)
+                .labelsHidden()
+                .help("Editor layout")
+            }
+
+            if app.vault.isIndexing {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Button {
+                app.showCommandPalette = true
+            } label: {
+                Label("Search", systemImage: "magnifyingglass")
+                    .labelStyle(.iconOnly)
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help("Command palette (⌘P)")
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity)
+        .background {
+            Rectangle()
+                .fill(Color(nsColor: .windowBackgroundColor))
+        }
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+
+    private func chromeIconButton(
+        _ systemImage: String,
+        isOn: Bool,
+        help: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(isOn ? Color.primary : Color.secondary)
+                .frame(width: 28, height: 28)
+                .background {
+                    if isOn {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.primary.opacity(0.08))
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .help(help)
     }
 }
 
-// Soft titlebar material
+// Opaque titlebar; controls live in NexusChromeBar so the strip is truly full-width.
 struct WindowAccessor: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .visible
-            window.isMovableByWindowBackground = false
-            window.backgroundColor = NSColor.windowBackgroundColor
-            window.toolbarStyle = .unified
-        }
+        DispatchQueue.main.async { configure(view.window) }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async { configure(nsView.window) }
+    }
+
+    private func configure(_ window: NSWindow?) {
+        guard let window else { return }
+        window.titlebarAppearsTransparent = false
+        window.titleVisibility = .visible
+        window.isMovableByWindowBackground = false
+        window.backgroundColor = NSColor.windowBackgroundColor
+        window.toolbarStyle = .unified
+        window.styleMask.remove(.fullSizeContentView)
+        // Empty system toolbar — chrome is our full-width bar.
+        window.toolbar = nil
+    }
+}
+
+struct WindowSubtitleSync: NSViewRepresentable {
+    var subtitle: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        view.isHidden = true
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
             guard let window = nsView.window else { return }
-            window.titlebarAppearsTransparent = true
-            window.toolbarStyle = .unified
+            if window.subtitle != subtitle {
+                window.subtitle = subtitle
+            }
         }
     }
 }
@@ -312,6 +411,3 @@ struct WelcomeView: View {
         }
     }
 }
-
-// Need AppKit for NSOpenPanel in WelcomeView
-import AppKit

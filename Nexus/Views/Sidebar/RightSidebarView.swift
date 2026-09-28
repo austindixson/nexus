@@ -1,32 +1,92 @@
 import SwiftUI
+import AppKit
 
 struct RightSidebarView: View {
     @EnvironmentObject private var app: AppState
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $app.rightSidebarTab) {
-                ForEach(RightSidebarTab.allCases) { tab in
-                    Image(systemName: tab.systemImage).help(tab.title).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(8)
+            SidebarIconBar(
+                items: RightSidebarTab.allCases.map {
+                    SidebarIconBarItem(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
+                },
+                selection: Binding(
+                    get: { app.rightSidebarTab.rawValue },
+                    set: { if let t = RightSidebarTab(rawValue: $0) { app.rightSidebarTab = t } }
+                )
+            )
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
 
             Divider()
 
-            switch app.rightSidebarTab {
-            case .backlinks:
-                BacklinksPane()
-            case .outgoing:
-                OutgoingLinksPane()
-            case .properties:
-                PropertiesPane()
+            Group {
+                switch app.rightSidebarTab {
+                case .backlinks:
+                    BacklinksPane()
+                case .outgoing:
+                    OutgoingLinksPane()
+                case .properties:
+                    PropertiesPane()
+                case .ask:
+                    AskNexusPanel()
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .background(.ultraThinMaterial)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
+
+// MARK: - Shared icon tab bar
+
+struct SidebarIconBarItem: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let systemImage: String
+}
+
+/// Compact icon tabs — explicit sizes so they never collapse to an empty strip.
+struct SidebarIconBar: View {
+    let items: [SidebarIconBarItem]
+    @Binding var selection: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(items) { item in
+                let selected = selection == item.id
+                Button {
+                    selection = item.id
+                } label: {
+                    Image(systemName: item.systemImage)
+                        .font(.system(size: 14, weight: selected ? .semibold : .medium))
+                        .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                        .frame(width: 40, height: 30)
+                        .background {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(selected ? Color.accentColor.opacity(0.15) : Color.clear)
+                        }
+                        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .help(item.title)
+                .accessibilityLabel(item.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: 38)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.18))
+        }
+    }
+}
+
+// MARK: - Panes
 
 struct BacklinksPane: View {
     @EnvironmentObject private var app: AppState
@@ -175,7 +235,6 @@ struct FlowTags: View {
     }
 }
 
-/// Simple wrapping tag chips without a full layout engine.
 struct FlexibleTags: View {
     let tags: [String]
 
