@@ -168,6 +168,8 @@ final class GitSyncService: ObservableObject {
     private var commitTask: Task<Void, Never>?
     /// Vault mutation events awaiting the next debounced autocommit.
     private var pendingChanges = false
+    /// Raw stderr from the most recent failed git command (headless diagnostics).
+    var lastGitErrorRaw: String?
     private var cancellables = Set<AnyCancellable>()
     /// Re-entrancy guard for the whole cycle (init/enable/merge).
     private var cycleLock = false
@@ -984,6 +986,7 @@ final class GitSyncService: ObservableObject {
                 "Pull produced conflicts. Rebase aborted; your local commits are intact. Resolve in Settings → Sync."
             )
         }
+        lastGitErrorRaw = "pull: " + result.stderr
         throw GitError.commandFailed("pull", result.stderr)
     }
 
@@ -1028,6 +1031,7 @@ final class GitSyncService: ObservableObject {
             }
             throw GitError.commandFailed("push", rebase.stderr)
         }
+        lastGitErrorRaw = "push: " + result.stderr
         throw GitError.commandFailed("push", result.stderr)
     }
 

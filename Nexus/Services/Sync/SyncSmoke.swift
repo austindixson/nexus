@@ -57,6 +57,8 @@ enum SyncSmoke {
                 "action": sync.status.lastAction,
             ]
             if let err = sync.status.lastError { report["error"] = err }
+            // Raw git stderr for the last failed command, for headless debugging.
+            if let raw = sync.lastGitErrorRaw { report["git_stderr"] = raw }
             report["ahead"] = String(sync.status.aheadCount)
             report["behind"] = String(sync.status.behindCount)
             report["dirty"] = String(sync.status.dirtyCount)

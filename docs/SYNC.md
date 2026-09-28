@@ -36,7 +36,36 @@ The vault repo is a normal git repo, so any topology works:
 
 - **Bare repo on a server / another Mac**: create it once with
   `git init --bare ~/vault-remote.git`, then add it as the remote on each machine.
-  Example over SSH: `ssh+git://ghost32.local/Users/ghost32/vault-remote.git`.
+  Over SSH, the canonical form is `ssh://ghost32/Users/ghost32/vault-remote.git`
+  (or the shorthand `ghost32:/Users/ghost32/vault-remote.git`, which Nexus expands
+  for you; `ssh+git://` is not a git scheme).
+
+### SSH remotes without a password (recommended)
+
+`Nexus` runs `git` with a minimal environment (`PATH`, `HOME`, `SSH_AUTH_SOCK`), so
+it cannot answer password prompts — an interactive `git pull` succeeding in Terminal
+is **not** proof Nexus can push. Use one of:
+
+1. **ssh-agent (no password on the key)**
+
+   ```bash
+   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519 -N "" -C "nexus@$(hostname)"
+   ssh-copy-id -i ~/.ssh/id_ed25519 user@ghost32
+   ```
+
+   With `SSH_AUTH_SOCK` inherited from your login session, Nexus authenticates
+   automatically — nothing to store in the Keychain.
+
+2. **A passphrase-protected key**
+
+   Enter the passphrase once in Settings → Sync (Keychain account label, e.g.
+   `nexus-ssh`). Nexus exposes it to `git` through a temporary `SSH_ASKPASS`
+   helper and a temp `SSH_AUTH_SOCK`, and deletes both files immediately after
+   each `git` command; the passphrase never touches the vault or UserDefaults.
+
+3. **HTTPS tokens**: enter the token once (stored in the Keychain under
+   `com.ghost64.nexus.sync`). Nexus never writes tokens into the vault's git
+   config or remote URL.
 - **GitHub / GitLab**: create an empty repo and paste its URL into Settings → Sync.
 - **LAN path**: any reachable filesystem path (including a mounted share).
 
