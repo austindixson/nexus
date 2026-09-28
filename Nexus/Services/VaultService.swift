@@ -35,6 +35,20 @@ final class VaultService: ObservableObject {
 
     // MARK: - Open / close
 
+    /// Called after any vault content mutation (create/save/rename/delete or
+    /// FSEvents rescan). GitSyncService uses this to schedule debounced autocommits.
+    var onNoteMutated: ((String) -> Void)?
+
+    /// Called after Nexus persists workspace state into `<vault>/.nexus/workspace.json`
+    /// (last vault path, tabs, layout). GitSyncService uses this to keep that
+    /// machine-local file out of every sync commit.
+    var onWorkspaceSaved: ((String) -> Void)?
+
+    /// Path of the per-vault workspace sidecar (relative to vault root).
+    nonisolated static func workspaceSidecarPath(for vaultRoot: URL) -> String {
+        ".nexus/workspace.json"
+    }
+
     func openVault(at url: URL) {
         closeVault()
         let standardized = url.standardizedFileURL
@@ -65,6 +79,10 @@ final class VaultService: ObservableObject {
         } catch {
             lastError = "Index open failed: \(error.localizedDescription)"
             indexStore = nil
+        }
+
+        WorkspaceService.onVaultWorkspaceSaved = { [weak self] path in
+            self?.onWorkspaceSaved?(path)
         }
 
         fullRescan()
@@ -139,6 +157,9 @@ final class VaultService: ObservableObject {
     }
 
     /// Incremental rescan: only reparse notes whose mtime changed.
+    /// Marker passed to onNoteMutated for "the tree changed" events (vs a specific path).
+    static let rescanChangeToken = "__rescan__"
+
     func incrementalRescan() {
         guard let root = rootURL else { return }
         isIndexing = true
@@ -165,6 +186,12 @@ final class VaultService: ObservableObject {
                 self.noteCount = merged.count
                 self.isIndexing = false
                 self.syncIndex(with: merged)
+                // Notify only when the scan changed something, so a git pull (which
+                // lands as external file changes) schedules a re-commit of merged
+                // state while pure watcher churn stays silent.
+                if merged != previous {
+                    self.onNoteMutated?(VaultService.rescanChangeToken)
+                }
             }
         }
     }
@@ -363,6 +390,7 @@ final class VaultService: ObservableObject {
                 upsertIndex(for: rel, doc: doc)
                 patchTreeInsertNote(path: rel, name: fileName, modified: doc.modified)
             }
+            onNoteMutated?(rel)
             return rel
         } catch {
             lastError = error.localizedDescription
@@ -394,6 +422,7 @@ final class VaultService: ObservableObject {
             if let doc = loadNote(at: url, relativePath: path) {
                 notes[path] = doc
                 upsertIndex(for: path, doc: doc)
+                onNoteMutated?(path)
             }
         } catch {
             lastError = error.localizedDescription
@@ -414,6 +443,7 @@ final class VaultService: ObservableObject {
             }
             noteCount = notes.count
             removeFromTree(path: path)
+            onNoteMutated?(path)
         } catch {
             lastError = error.localizedDescription
         }
@@ -428,6 +458,7 @@ final class VaultService: ObservableObject {
             try fm.moveItem(at: url, to: dest)
             // For simplicity, incremental rescan after rename (path graph changes)
             incrementalRescan()
+            onNoteMutated?(path)
         } catch {
             lastError = error.localizedDescription
         }
@@ -444,6 +475,7 @@ final class VaultService: ObservableObject {
             markSelfWrite()
             let data = try JSONEncoder().encode(document)
             try data.write(to: url, options: .atomic)
+            onNoteMutated?(path)
         } catch {
             lastError = error.localizedDescription
         }

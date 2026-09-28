@@ -194,6 +194,7 @@ enum LeftSidebarTab: String, CaseIterable, Identifiable {
     case search
     case tags
     case outline
+    case sync
 
     var id: String { rawValue }
 
@@ -203,6 +204,7 @@ enum LeftSidebarTab: String, CaseIterable, Identifiable {
         case .search: return "Search"
         case .tags: return "Tags"
         case .outline: return "Outline"
+        case .sync: return "Sync"
         }
     }
 
@@ -212,6 +214,7 @@ enum LeftSidebarTab: String, CaseIterable, Identifiable {
         case .search: return "magnifyingglass"
         case .tags: return "tag"
         case .outline: return "list.bullet.indent"
+        case .sync: return "arrow.triangle.2.circlepath"
         }
     }
 }

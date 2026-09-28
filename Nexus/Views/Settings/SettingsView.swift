@@ -23,6 +23,9 @@ struct SettingsView: View {
             aiTab
                 .tabItem { Label("AI", systemImage: "sparkles") }
 
+            syncTab
+                .tabItem { Label("Sync", systemImage: "arrow.triangle.2.circlepath") }
+
             HotkeysSettingsView()
                 .tabItem { Label("Hotkeys", systemImage: "keyboard") }
 
@@ -227,6 +230,10 @@ struct SettingsView: View {
             }
         }
         .padding()
+    }
+
+    private var syncTab: some View {
+        SyncSettingsView()
     }
 
     private var aboutTab: some View {

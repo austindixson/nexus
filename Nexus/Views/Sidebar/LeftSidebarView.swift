@@ -31,6 +31,8 @@ struct LeftSidebarView: View {
                     TagsView()
                 case .outline:
                     OutlineView()
+                case .sync:
+                    SyncSidebarView()
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

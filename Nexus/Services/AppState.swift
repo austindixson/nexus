@@ -9,6 +9,8 @@ final class AppState: ObservableObject {
     let vault = VaultService()
     let linkIndex = LinkIndex()
     let pluginHost = PluginHost()
+    /// Git-based cloud sync (opt-in per vault; off = Nexus never touches the network).
+    @Published private(set) var sync = GitSyncService.shared
 
     // Navigation / layout
     @Published var mainMode: MainMode = .editor
@@ -92,6 +94,9 @@ final class AppState: ObservableObject {
                 }
                 self.restoreWorkspaceForCurrentVault()
                 Task { await self.pluginHost.bootstrap(for: root) }
+                // Sync follows the vault: settings load, timer starts only when enabled.
+                GitSyncService.shared.vaultServiceForObservation = self.vault
+                GitSyncService.shared.attach(vaultRoot: root)
             }
             .store(in: &cancellables)
 

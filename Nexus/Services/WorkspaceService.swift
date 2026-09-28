@@ -4,6 +4,9 @@ import AppKit
 /// Persists UI layout / open tabs / graph filters across launches.
 /// App-wide defaults in UserDefaults; per-vault snapshot in `<vault>/.nexus/workspace.json`.
 enum WorkspaceService {
+    /// Notified with the vault-relative path after `.nexus/workspace.json` is written.
+    /// GitSyncService uses this to keep the machine-local sidecar out of sync commits.
+    static var onVaultWorkspaceSaved: ((String) -> Void)?
     private static let defaultsKey = "nexus.workspace.v1"
 
     struct Snapshot: Codable, Equatable {
@@ -118,6 +121,7 @@ enum WorkspaceService {
         if let data = try? JSONEncoder().encode(snapshot) {
             try? data.write(to: url, options: .atomic)
         }
+        onVaultWorkspaceSaved?(".nexus/workspace.json")
         saveAppDefaults(snapshot)
     }
 
