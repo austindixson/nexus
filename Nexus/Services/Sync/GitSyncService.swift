@@ -73,10 +73,22 @@ final class OutputCollector: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
     private var done = false
+    private let doneGroup = DispatchGroup()
+    private var started = false
 
     func startReading(from pipe: Pipe) {
+        lock.lock()
+        guard !started else { lock.unlock(); return }
+        started = true
+        lock.unlock()
+        doneGroup.enter()
         let handle = pipe.fileHandleForReading
         DispatchQueue.global(qos: .utility).async { [weak self] in
+            defer {
+                try? handle.close()
+                self?.finish()
+                self?.doneGroup.leave()
+            }
             while true {
                 let chunk: Data
                 do {
@@ -87,8 +99,6 @@ final class OutputCollector: @unchecked Sendable {
                 if chunk.isEmpty { break }
                 self?.append(chunk)
             }
-            try? handle.close()
-            self?.finish()
         }
     }
 
@@ -102,6 +112,13 @@ final class OutputCollector: @unchecked Sendable {
         lock.lock()
         done = true
         lock.unlock()
+    }
+
+    /// Block until the reader thread has drained EOF (or a short timeout elapses).
+    /// Must be called after the process exits so the pipe can close.
+    func waitUntilFinished(timeout: TimeInterval = 2) {
+        _ = doneGroup.wait(timeout: .now() + timeout)
+        finish()
     }
 
     var isFinished: Bool {
@@ -870,7 +887,7 @@ final class GitSyncService: ObservableObject {
 
     /// Bumped whenever sync diagnostics change, so smoke reports prove which
     /// build produced them.
-    nonisolated static let diagnosticsTag = "2026-09-28-4"
+    nonisolated static let diagnosticsTag = "2026-09-28-5"
 
     nonisolated static func gitPathPresent() -> Bool {
         FileManager.default.isExecutableFile(atPath: "/usr/bin/git")
@@ -916,8 +933,8 @@ final class GitSyncService: ObservableObject {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
         }
         process.waitUntilExit()
-        outData.finish()
-        errData.finish()
+        outData.waitUntilFinished()
+        errData.waitUntilFinished()
         return GitResult(exitCode: process.terminationStatus, stdout: outData.snapshot(), stderr: errData.snapshot())
     }
 
@@ -995,8 +1012,8 @@ final class GitSyncService: ObservableObject {
                         try? await Task.sleep(nanoseconds: 2_000_000_000)
                     }
                     if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-                    outData.finish()
-                    errData.finish()
+                    outData.waitUntilFinished()
+                    errData.waitUntilFinished()
                     let partial = errData.snapshot()
                     box.resume {
                         GitResult(
@@ -1021,6 +1038,8 @@ final class GitSyncService: ObservableObject {
                         process.terminationHandler = nil
                         kill(process.processIdentifier, SIGKILL)
                     }
+                    outData.waitUntilFinished()
+                    errData.waitUntilFinished()
                     box.resume {
                         GitResult(exitCode: -1, stdout: outData.snapshot(),
                                   stderr: "git did not finish within \(Int(ceiling))s and was stopped.")
@@ -1028,9 +1047,12 @@ final class GitSyncService: ObservableObject {
                 }
                 process.terminationHandler = { proc in
                     ceilingTask.cancel()
-                    outData.finish()
-                    errData.finish()
                     timeoutTask.cancel()
+                    // Wait for pipe drain — snapshotting immediately races the
+                    // reader thread and intermittently returns empty stdout on CI
+                    // (status looks clean → enable skips the first commit).
+                    outData.waitUntilFinished()
+                    errData.waitUntilFinished()
                     var result = GitResult(
                         exitCode: proc.terminationStatus,
                         stdout: outData.snapshot(),
