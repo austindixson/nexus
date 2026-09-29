@@ -32,4 +32,15 @@ final class AIConfigurationTests: XCTestCase {
         XCTAssertNil(AIConfiguration.normalizeBaseURL("not a url"))
         XCTAssertNotNil(AIConfiguration.normalizeBaseURL("http://100.64.0.1:11434"))
     }
+
+    func testCodexRejectsPlatformAPIModels() {
+        XCTAssertTrue(AIConfiguration.isPlatformAPIOnlyModel("gpt-4o-mini"))
+        XCTAssertTrue(AIConfiguration.isPlatformAPIOnlyModel("gpt-4o"))
+        XCTAssertTrue(AIConfiguration.isPlatformAPIOnlyModel("gpt-4-turbo"))
+        XCTAssertFalse(AIConfiguration.isPlatformAPIOnlyModel("gpt-5.5"))
+        XCTAssertFalse(AIConfiguration.isPlatformAPIOnlyModel("gpt-5.6-sol"))
+        XCTAssertEqual(AIConfiguration.resolvedCodexModelID("gpt-4o-mini"), AIConfiguration.codexDefaultModel)
+        XCTAssertEqual(AIConfiguration.resolvedCodexModelID("gpt-5.6-sol"), "gpt-5.6-sol")
+        XCTAssertEqual(AIConfiguration.resolvedCodexModelID(""), AIConfiguration.codexDefaultModel)
+    }
 }
