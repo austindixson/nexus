@@ -66,6 +66,7 @@
 		80AC957787647FEE1853BF5A /* KaTeX_Size3-Regular.woff2 in Resources */ = {isa = PBXBuildFile; fileRef = E741F66872D095DA2388924D /* KaTeX_Size3-Regular.woff2 */; };
 		80B6C76459F5944ECDFAD0A9 /* VaultIndexStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7265A27AD956EBBE17E2E6D /* VaultIndexStore.swift */; };
 		8419381F8302096AC63124D4 /* KaTeX_Main-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 3EB5FCBC4EA1E2924A3E2DD0 /* KaTeX_Main-Regular.ttf */; };
+		89CEF5B8132E2E5060DA2F32 /* CLICredentialStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7792D4BCAD048218DACDDB06 /* CLICredentialStoreTests.swift */; };
 		8B50A0676A81CB6FE8508B0B /* MarkdownParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B26C1B65064D037CCAB816A /* MarkdownParserTests.swift */; };
 		8BCC479CE7B7420A3DB75D87 /* KaTeX_Caligraphic-Regular.woff in Resources */ = {isa = PBXBuildFile; fileRef = 35366C55F6E1BF5272E5E553 /* KaTeX_Caligraphic-Regular.woff */; };
 		8BE820E6235A20DC746C6F6F /* KaTeX_Fraktur-Bold.woff in Resources */ = {isa = PBXBuildFile; fileRef = B842552C83CBAF63F54442CF /* KaTeX_Fraktur-Bold.woff */; };
@@ -98,6 +99,7 @@
 		D053D192F71DE58EDD0AA7C6 /* KaTeX_Size1-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = DFB57CBA083612C76470248D /* KaTeX_Size1-Regular.ttf */; };
 		D15793B80D4E0FFE07C89D14 /* KaTeX_Math-BoldItalic.woff in Resources */ = {isa = PBXBuildFile; fileRef = E70E2149EEEF4C1EDD708E94 /* KaTeX_Math-BoldItalic.woff */; };
 		D1B43CC2B1BC6F06C8B0897D /* SyncSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2A658C1DD0F53D4D5EFA220 /* SyncSettingsView.swift */; };
+		D4B5BE280763A245CB8C243F /* CLICredentialStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE15CBB52991BC42A8F4769C /* CLICredentialStore.swift */; };
 		D51B6BB97083B1B6FF580891 /* GraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A1A7E6DEC38D26C0DE1F1C6 /* GraphView.swift */; };
 		D790A55592224E24EB7C1C8C /* CanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3C3211D224800DC1A507F5D /* CanvasView.swift */; };
 		DA01F0E3F5A9B7F4567604EB /* KaTeX_SansSerif-Italic.woff in Resources */ = {isa = PBXBuildFile; fileRef = C0AFE8CA65C39BD394A12A46 /* KaTeX_SansSerif-Italic.woff */; };
@@ -172,6 +174,7 @@
 		70EB9EAF6B225B2DE9CAECA0 /* KaTeX_Math-Italic.woff */ = {isa = PBXFileReference; path = "KaTeX_Math-Italic.woff"; sourceTree = "<group>"; };
 		768675A210B09640966134C9 /* CommandPaletteView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommandPaletteView.swift; sourceTree = "<group>"; };
 		76C7CAB28C4C0D44E0E0D13D /* KaTeX_SansSerif-Italic.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "KaTeX_SansSerif-Italic.ttf"; sourceTree = "<group>"; };
+		7792D4BCAD048218DACDDB06 /* CLICredentialStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLICredentialStoreTests.swift; sourceTree = "<group>"; };
 		77CA884939593DC8BF5606B5 /* KaTeX_Fraktur-Regular.woff */ = {isa = PBXFileReference; path = "KaTeX_Fraktur-Regular.woff"; sourceTree = "<group>"; };
 		77D23805B760ADB992B5CB8E /* KaTeX_Size3-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "KaTeX_Size3-Regular.ttf"; sourceTree = "<group>"; };
 		7818F3F101360DB9BB7ADF59 /* KaTeX_Fraktur-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "KaTeX_Fraktur-Bold.ttf"; sourceTree = "<group>"; };
@@ -224,6 +227,7 @@
 		E741F66872D095DA2388924D /* KaTeX_Size3-Regular.woff2 */ = {isa = PBXFileReference; path = "KaTeX_Size3-Regular.woff2"; sourceTree = "<group>"; };
 		EC4F151BBCFA63C2842614BB /* KaTeX_Math-BoldItalic.woff2 */ = {isa = PBXFileReference; path = "KaTeX_Math-BoldItalic.woff2"; sourceTree = "<group>"; };
 		EC9341373DD11C6CA0B5C8BE /* HotkeyService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyService.swift; sourceTree = "<group>"; };
+		EE15CBB52991BC42A8F4769C /* CLICredentialStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLICredentialStore.swift; sourceTree = "<group>"; };
 		EF032C5106B8A30C6FA84E8C /* AskNexusPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AskNexusPanel.swift; sourceTree = "<group>"; };
 		EF950B5264890B46DA3A3BFC /* PluginAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PluginAPI.swift; sourceTree = "<group>"; };
 		EF9839AA50E9791C4E127A1E /* KaTeX_SansSerif-Bold.woff */ = {isa = PBXFileReference; path = "KaTeX_SansSerif-Bold.woff"; sourceTree = "<group>"; };
@@ -283,6 +287,7 @@
 			isa = PBXGroup;
 			children = (
 				5A4E43023F0F3E4D9ADDF2D0 /* AIConfigurationTests.swift */,
+				7792D4BCAD048218DACDDB06 /* CLICredentialStoreTests.swift */,
 				3AC2BA064BA41BA90FA50FA8 /* ContinuedRoadmapTests.swift */,
 				09FB6080A391166085E6DDE9 /* EndToEndTests.swift */,
 				6B26C1B65064D037CCAB816A /* MarkdownParserTests.swift */,
@@ -503,6 +508,7 @@
 				4C665C52344D387546219A5B /* AIConfiguration.swift */,
 				5896E835841EBAFCB1212138 /* AIProvider.swift */,
 				105947B5041782B06032BDD7 /* ChatAgent.swift */,
+				EE15CBB52991BC42A8F4769C /* CLICredentialStore.swift */,
 				B1535D87F1A7EF8FD240BDF2 /* RetrievalService.swift */,
 			);
 			path = AI;
@@ -697,6 +703,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8D94E6E7D4E90995B76004F8 /* AIConfigurationTests.swift in Sources */,
+				89CEF5B8132E2E5060DA2F32 /* CLICredentialStoreTests.swift in Sources */,
 				37819B8E23F13CE5C121B6EA /* ContinuedRoadmapTests.swift in Sources */,
 				65A6D7A76F9EA036FFD46838 /* EndToEndTests.swift in Sources */,
 				8B50A0676A81CB6FE8508B0B /* MarkdownParserTests.swift in Sources */,
@@ -714,6 +721,7 @@
 				3D1097F14A87939197CD2F12 /* AppState.swift in Sources */,
 				3A561D6D0992FA2850CA4C81 /* AskNexusPanel.swift in Sources */,
 				EBEC6F7468ACE45302487524 /* AskpassHelper.swift in Sources */,
+				D4B5BE280763A245CB8C243F /* CLICredentialStore.swift in Sources */,
 				D790A55592224E24EB7C1C8C /* CanvasView.swift in Sources */,
 				B664FBDFEDB5C46CBCCCB4FE /* ChatAgent.swift in Sources */,
 				BD91FCBBFAA87BA88EBEF6A1 /* CloudVaultSupport.swift in Sources */,

@@ -29,6 +29,7 @@ struct SettingsView: View {
     @State private var xaiKeyDraft = ""
     @State private var openAIKeyDraft = ""
     @State private var anthropicKeyDraft = ""
+    @State private var deepSeekKeyDraft = ""
     @State private var remoteKeyDraft = ""
     @State private var keySavedMessage: String?
     @State private var connectionMessage: String?
@@ -158,10 +159,30 @@ struct SettingsView: View {
                     connectionOK = nil
                 }
                 TextField("Model ID", text: $ai.modelID)
-                Text("Vault works fully offline with AI disabled. Keys stay in Keychain — never in vault files. There is no Nexus account; cloud providers use their own API keys.")
+                Text("Vault works fully offline with AI disabled. Keys stay in Keychain — never in vault files. There is no Nexus account.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 providerNeedsKeyHint
+            }
+
+            Section("Local credentials") {
+                Toggle("Use Claude Code / Codex CLI and project .env when no Keychain key", isOn: $ai.useLocalCredentials)
+                TextField("Project .env path", text: $ai.clmEnvPath)
+                Text(ai.claudeCodeStatusText)
+                    .font(.caption2)
+                    .foregroundStyle(ai.hasClaudeCodeCLI ? .green : .secondary)
+                Text(ai.codexStatusText)
+                    .font(.caption2)
+                    .foregroundStyle(ai.hasCodexCLI ? .green : .secondary)
+                Text(ai.clmEnvStatusText)
+                    .font(.caption2)
+                    .foregroundStyle(ai.hasCLMEnv ? .green : .secondary)
+                Text("Reads ~/.claude, ~/.codex, and DEEPSEEK_API_KEY (etc.) from the .env path — does not copy secrets into Nexus. Cursor login is not supported.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Refresh detection") {
+                    ai.refreshKeyFlags()
+                }
             }
 
             if ai.providerKind == .openai {
@@ -179,7 +200,7 @@ struct SettingsView: View {
                         },
                         hasKey: ai.hasOpenAIKey
                     )
-                    Text("https://api.openai.com/v1 · paste a key from the OpenAI dashboard.")
+                    Text("https://api.openai.com/v1 · or Codex CLI ChatGPT login when local credentials are enabled.")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -221,7 +242,28 @@ struct SettingsView: View {
                         },
                         hasKey: ai.hasAnthropicKey
                     )
-                    Text("Default model: claude-sonnet-4-5 · https://api.anthropic.com")
+                    Text("Console API key, or Claude Code CLI OAuth when local credentials are enabled.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            if ai.providerKind == .deepseek {
+                Section("DeepSeek") {
+                    SecureField("DEEPSEEK_API_KEY", text: $deepSeekKeyDraft)
+                    keyButtons(
+                        save: {
+                            ai.setDeepSeekKey(deepSeekKeyDraft)
+                            deepSeekKeyDraft = ""
+                            keySavedMessage = ai.hasDeepSeekKey ? "Key saved to Keychain." : "Key cleared."
+                        },
+                        clear: {
+                            ai.setDeepSeekKey(nil)
+                            keySavedMessage = "Key cleared."
+                        },
+                        hasKey: ai.hasDeepSeekKey
+                    )
+                    Text("https://api.deepseek.com · default model deepseek-chat. Can also read DEEPSEEK_API_KEY from the project .env path (e.g. Desktop/CLM/.env).")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -319,16 +361,20 @@ struct SettingsView: View {
     @ViewBuilder
     private var providerNeedsKeyHint: some View {
         switch ai.providerKind {
-        case .openai where !ai.hasOpenAIKey:
-            Text("Add an API key below to enable OpenAI.")
+        case .openai where !ai.isEnabled:
+            Text("Add an API key, or enable local Codex CLI / CLM .env credentials.")
                 .font(.caption)
                 .foregroundStyle(.orange)
         case .xai where !ai.hasXAIKey:
             Text("Add an API key below to enable SpaceXAI.")
                 .font(.caption)
                 .foregroundStyle(.orange)
-        case .anthropic where !ai.hasAnthropicKey:
-            Text("Add an API key below to enable Anthropic.")
+        case .anthropic where !ai.isEnabled:
+            Text("Add an API key, or enable Claude Code CLI / CLM .env credentials.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        case .deepseek where !ai.isEnabled:
+            Text("Add a DeepSeek API key, or enable reading DEEPSEEK_API_KEY from the project .env.")
                 .font(.caption)
                 .foregroundStyle(.orange)
         case .remoteOpenAI where !ai.hasRemoteOpenAIKey:
