@@ -70,6 +70,7 @@
 		8BCC479CE7B7420A3DB75D87 /* KaTeX_Caligraphic-Regular.woff in Resources */ = {isa = PBXBuildFile; fileRef = 35366C55F6E1BF5272E5E553 /* KaTeX_Caligraphic-Regular.woff */; };
 		8BE820E6235A20DC746C6F6F /* KaTeX_Fraktur-Bold.woff in Resources */ = {isa = PBXBuildFile; fileRef = B842552C83CBAF63F54442CF /* KaTeX_Fraktur-Bold.woff */; };
 		8D529651683C4DFDE4494281 /* GitSyncService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97902CAD24F6003AA55FD1F6 /* GitSyncService.swift */; };
+		8D94E6E7D4E90995B76004F8 /* AIConfigurationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A4E43023F0F3E4D9ADDF2D0 /* AIConfigurationTests.swift */; };
 		8DF5A5980266C58014755365 /* KaTeX_SansSerif-Italic.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 76C7CAB28C4C0D44E0E0D13D /* KaTeX_SansSerif-Italic.ttf */; };
 		8F3F2BF3504CFD5C8B035942 /* SyncE2ETests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A8DD31037A57677C62E7A72 /* SyncE2ETests.swift */; };
 		9CE56764FB662315F84812AF /* KaTeX_SansSerif-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 0400FE2A88D12D8129065056 /* KaTeX_SansSerif-Regular.ttf */; };
@@ -157,6 +158,7 @@
 		510B6DDD514D9923416D5B27 /* CloudVaultSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudVaultSupport.swift; sourceTree = "<group>"; };
 		535F63CEA940C65904E1BBB8 /* KaTeX_AMS-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "KaTeX_AMS-Regular.ttf"; sourceTree = "<group>"; };
 		5896E835841EBAFCB1212138 /* AIProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIProvider.swift; sourceTree = "<group>"; };
+		5A4E43023F0F3E4D9ADDF2D0 /* AIConfigurationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIConfigurationTests.swift; sourceTree = "<group>"; };
 		5ACEB3895BAA09F71DD91AF4 /* KaTeX_Size2-Regular.woff2 */ = {isa = PBXFileReference; path = "KaTeX_Size2-Regular.woff2"; sourceTree = "<group>"; };
 		5CF4B6BA19E933B5D287F1FD /* KaTeX_Size3-Regular.woff */ = {isa = PBXFileReference; path = "KaTeX_Size3-Regular.woff"; sourceTree = "<group>"; };
 		5D0FB63C406E9884A6804B8A /* KaTeX_Main-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "KaTeX_Main-Bold.ttf"; sourceTree = "<group>"; };
@@ -280,6 +282,7 @@
 		0EBCEF7719D6AE51AC9B466C /* NexusTests */ = {
 			isa = PBXGroup;
 			children = (
+				5A4E43023F0F3E4D9ADDF2D0 /* AIConfigurationTests.swift */,
 				3AC2BA064BA41BA90FA50FA8 /* ContinuedRoadmapTests.swift */,
 				09FB6080A391166085E6DDE9 /* EndToEndTests.swift */,
 				6B26C1B65064D037CCAB816A /* MarkdownParserTests.swift */,
@@ -693,6 +696,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8D94E6E7D4E90995B76004F8 /* AIConfigurationTests.swift in Sources */,
 				37819B8E23F13CE5C121B6EA /* ContinuedRoadmapTests.swift in Sources */,
 				65A6D7A76F9EA036FFD46838 /* EndToEndTests.swift in Sources */,
 				8B50A0676A81CB6FE8508B0B /* MarkdownParserTests.swift in Sources */,

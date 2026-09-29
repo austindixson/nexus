@@ -99,10 +99,14 @@ struct AskNexusPanel: View {
         switch aiConfig.providerKind {
         case .disabled:
             return "Offline"
+        case .openai where !aiConfig.hasOpenAIKey:
+            return "OpenAI — needs key"
         case .xai where !aiConfig.hasXAIKey:
             return "xAI — needs key"
-        case .openAICompatible where !aiConfig.hasOpenAIKey:
-            return "OpenAI — needs key"
+        case .anthropic where !aiConfig.hasAnthropicKey:
+            return "Claude — needs key"
+        case .remoteOpenAI where !aiConfig.hasRemoteOpenAIKey:
+            return "Remote — needs key"
         default:
             return "Offline"
         }
@@ -203,6 +207,10 @@ struct AskNexusPanel: View {
                 Text("This provider needs an API key — open AI Settings to add one.")
                     .font(.caption)
                     .foregroundStyle(.orange)
+            } else if aiConfig.providerKind == .ollama || aiConfig.providerKind == .remoteOpenAI {
+                Text("Tip: set a Tailscale MagicDNS or Funnel URL in AI Settings for a cloud-served model.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .padding(12)

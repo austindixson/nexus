@@ -52,6 +52,7 @@ enum AIError: LocalizedError {
     case disabled
     case missingAPIKey
     case badURL
+    case unreachable(String)
     case httpStatus(Int, String)
     case emptyResponse
     case decoding
@@ -60,7 +61,8 @@ enum AIError: LocalizedError {
         switch self {
         case .disabled: return "AI is disabled. Enable a provider in Settings."
         case .missingAPIKey: return "Missing API key. Add one in Settings → AI (stored in Keychain)."
-        case .badURL: return "Invalid API base URL."
+        case .badURL: return "Invalid API base URL. Use http(s)://host[:port]/path]."
+        case .unreachable(let detail): return "Could not reach model endpoint: \(detail)"
         case .httpStatus(let code, let body): return "API error \(code): \(body.prefix(240))"
         case .emptyResponse: return "Empty response from model."
         case .decoding: return "Could not decode model response."
@@ -152,8 +154,10 @@ struct OpenAICompatibleProvider: AIProvider {
                         continuation.yield(text)
                     }
                     continuation.finish()
-                } catch {
+                } catch let error as AIError {
                     continuation.finish(throwing: error)
+                } catch {
+                    continuation.finish(throwing: AIError.unreachable(error.localizedDescription))
                 }
             }
         }
@@ -192,7 +196,163 @@ struct OpenAICompatibleProvider: AIProvider {
     }
 }
 
-// MARK: - Ollama local
+// MARK: - Anthropic Messages API
+
+struct AnthropicProvider: AIProvider {
+    let baseURL: URL
+    let apiKey: String
+    let defaultModel: String
+
+    var displayName: String { "Anthropic" }
+
+    func complete(_ request: AIChatRequest) async throws -> String {
+        var collected = ""
+        for try await chunk in stream(request) {
+            collected += chunk
+        }
+        let trimmed = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw AIError.emptyResponse }
+        return trimmed
+    }
+
+    func stream(_ request: AIChatRequest) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    let text = try await completeStream(request, continuation: continuation)
+                    if !text {
+                        let fallback = try await completeNonStream(request)
+                        continuation.yield(fallback)
+                    }
+                    continuation.finish()
+                } catch let error as AIError {
+                    continuation.finish(throwing: error)
+                } catch {
+                    continuation.finish(throwing: AIError.unreachable(error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    /// Returns true if any streamed text was yielded.
+    private func completeStream(
+        _ request: AIChatRequest,
+        continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) async throws -> Bool {
+        let url = baseURL.appendingPathComponent("v1/messages")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        req.timeoutInterval = 120
+
+        let (system, messages) = Self.splitSystem(request.messages)
+        var payload: [String: Any] = [
+            "model": request.model ?? defaultModel,
+            "max_tokens": request.maxTokens ?? 2048,
+            "temperature": request.temperature,
+            "stream": true,
+            "messages": messages,
+        ]
+        if let system, !system.isEmpty {
+            payload["system"] = system
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: req)
+        guard let http = response as? HTTPURLResponse else { throw AIError.emptyResponse }
+        if http.statusCode >= 400 {
+            var errBody = ""
+            for try await line in bytes.lines {
+                errBody += line
+                if errBody.count > 500 { break }
+            }
+            throw AIError.httpStatus(http.statusCode, errBody)
+        }
+
+        var yielded = false
+        for try await line in bytes.lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("data:") else { continue }
+            let payload = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { break }
+            guard let data = payload.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let type = json["type"] as? String
+            else { continue }
+            if type == "content_block_delta",
+               let delta = json["delta"] as? [String: Any],
+               let text = delta["text"] as? String,
+               !text.isEmpty {
+                yielded = true
+                continuation.yield(text)
+            }
+            if type == "message_stop" { break }
+        }
+        return yielded
+    }
+
+    private func completeNonStream(_ request: AIChatRequest) async throws -> String {
+        let url = baseURL.appendingPathComponent("v1/messages")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        req.timeoutInterval = 120
+
+        let (system, messages) = Self.splitSystem(request.messages)
+        var payload: [String: Any] = [
+            "model": request.model ?? defaultModel,
+            "max_tokens": request.maxTokens ?? 2048,
+            "temperature": request.temperature,
+            "stream": false,
+            "messages": messages,
+        ]
+        if let system, !system.isEmpty {
+            payload["system"] = system
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, response) = try await URLSession.shared.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw AIError.emptyResponse }
+        if http.statusCode >= 400 {
+            throw AIError.httpStatus(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+        guard
+            let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let content = json["content"] as? [[String: Any]]
+        else { throw AIError.decoding }
+        let text = content
+            .compactMap { block -> String? in
+                guard (block["type"] as? String) == "text" else { return nil }
+                return block["text"] as? String
+            }
+            .joined()
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw AIError.emptyResponse }
+        return trimmed
+    }
+
+    private static func splitSystem(_ messages: [AIMessage]) -> (String?, [[String: String]]) {
+        var systemParts: [String] = []
+        var rest: [[String: String]] = []
+        for m in messages {
+            switch m.role {
+            case .system:
+                systemParts.append(m.content)
+            case .user:
+                rest.append(["role": "user", "content": m.content])
+            case .assistant:
+                rest.append(["role": "assistant", "content": m.content])
+            }
+        }
+        let system = systemParts.isEmpty ? nil : systemParts.joined(separator: "\n\n")
+        return (system, rest)
+    }
+}
+
+// MARK: - Ollama (local or Tailscale / remote URL)
 
 struct OllamaProvider: AIProvider {
     let baseURL: URL
@@ -249,8 +409,10 @@ struct OllamaProvider: AIProvider {
                         if json["done"] as? Bool == true { break }
                     }
                     continuation.finish()
-                } catch {
+                } catch let error as AIError {
                     continuation.finish(throwing: error)
+                } catch {
+                    continuation.finish(throwing: AIError.unreachable(error.localizedDescription))
                 }
             }
         }
