@@ -1001,19 +1001,16 @@ final class GitSyncService: ObservableObject {
                 })
                 let timeoutTask = Task { [weak process] in
                     try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                    // Even when the cycle cancelled this task, a git process still
-                    // running past its timeout must never leave the continuation
-                    // suspended: clean up and resume regardless (ResultBox only
-                    // resumes once, so a late fire is harmless).
+                    guard !Task.isCancelled else { return }
                     guard let process, process.isRunning else { return }
-                    if !Task.isCancelled {
-                        process.terminationHandler = nil
-                        process.interrupt()
-                        try? await Task.sleep(nanoseconds: 2_000_000_000)
-                    }
+                    process.terminationHandler = nil
+                    process.interrupt()
+                    try? await Task.sleep(nanoseconds: 2_000_000_000)
+                    guard !Task.isCancelled else { return }
                     if process.isRunning { kill(process.processIdentifier, SIGKILL) }
                     outData.waitUntilFinished()
                     errData.waitUntilFinished()
+                    guard !Task.isCancelled else { return }
                     let partial = errData.snapshot()
                     box.resume {
                         GitResult(
@@ -1031,6 +1028,8 @@ final class GitSyncService: ObservableObject {
                 let ceiling = timeout + 60
                 let ceilingTask = Task { [weak process] in
                     try? await Task.sleep(nanoseconds: UInt64(ceiling * 1_000_000_000))
+                    // Cancelled sleep returns immediately — must not report a timeout.
+                    guard !Task.isCancelled else { return }
                     guard let process else { return }
                     if process.isRunning {
                         SyncTrace.log("git hard-ceiling kill after \(Int(ceiling))s: "
@@ -1040,35 +1039,37 @@ final class GitSyncService: ObservableObject {
                     }
                     outData.waitUntilFinished()
                     errData.waitUntilFinished()
+                    guard !Task.isCancelled else { return }
                     box.resume {
                         GitResult(exitCode: -1, stdout: outData.snapshot(),
                                   stderr: "git did not finish within \(Int(ceiling))s and was stopped.")
                     }
                 }
                 process.terminationHandler = { proc in
-                    ceilingTask.cancel()
-                    timeoutTask.cancel()
-                    // Wait for pipe drain — snapshotting immediately races the
-                    // reader thread and intermittently returns empty stdout on CI
-                    // (status looks clean → enable skips the first commit).
-                    outData.waitUntilFinished()
-                    errData.waitUntilFinished()
-                    var result = GitResult(
-                        exitCode: proc.terminationStatus,
-                        stdout: outData.snapshot(),
-                        stderr: errData.snapshot()
-                    )
-                    // Signal death (e.g. SIGKILL from the system) produces no output;
-                    // annotate so the sync UI is not silent.
-                    if result.exitCode != 0, result.stdout.isEmpty, result.stderr.isEmpty,
-                       proc.terminationReason == .uncaughtSignal {
-                        result = GitResult(
-                            exitCode: result.exitCode,
-                            stdout: "",
-                            stderr: "git was killed by a signal (exit \(result.exitCode))."
+                    // Return immediately so Process can close pipe write ends;
+                    // waiting here deadlocks the reader (EOF never arrives).
+                    let status = proc.terminationStatus
+                    let reason = proc.terminationReason
+                    DispatchQueue.global(qos: .utility).async {
+                        ceilingTask.cancel()
+                        timeoutTask.cancel()
+                        outData.waitUntilFinished()
+                        errData.waitUntilFinished()
+                        var result = GitResult(
+                            exitCode: status,
+                            stdout: outData.snapshot(),
+                            stderr: errData.snapshot()
                         )
+                        if result.exitCode != 0, result.stdout.isEmpty, result.stderr.isEmpty,
+                           reason == .uncaughtSignal {
+                            result = GitResult(
+                                exitCode: result.exitCode,
+                                stdout: "",
+                                stderr: "git was killed by a signal (exit \(result.exitCode))."
+                            )
+                        }
+                        box.resume { result }
                     }
-                    box.resume { result }
                 }
                 do {
                     try process.run()
