@@ -1,5 +1,6 @@
 # Xcode
 DerivedData/
+.derived/
 build/
 *.xcuserstate
 *.xccheckout
@@ -24,3 +25,11 @@ playground.xcworkspace
 # IDEs
 .idea/
 .vscode/
+
+# Secrets / local env
+.env
+.env.local
+*.pem
+
+# Local data
+.derived/

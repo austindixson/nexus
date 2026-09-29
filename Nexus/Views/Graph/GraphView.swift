@@ -16,7 +16,9 @@ struct GraphView: View {
                 .frame(width: 280)
         }
         .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear { rebuild() }
+        .onAppear {
+            rebuild()
+        }
         .onChange(of: app.linkIndex.lastBuilt) { _, _ in rebuild() }
         .onChange(of: app.graphMode) { _, _ in rebuild() }
         .onChange(of: app.graphLocalDepth) { _, _ in rebuild() }
@@ -30,10 +32,11 @@ struct GraphView: View {
         .onChange(of: app.graphReheat) { _, _ in engine.reheat() }
         .onChange(of: app.graphResetCamera) { _, _ in engine.fitToView() }
         .onChange(of: app.graphPhysics) { _, new in
+            // Sync knobs only. Reheat is owned by the sliders' edit-end handlers —
+            // never reheat from a generic onChange (hover re-renders used to explode the graph).
             engine.physics = new
             engine.simulator.settings = new
-            // Live slider tweaks should gently re-run layout, not cold-start.
-            engine.reheat(energy: 0.4)
+            engine.linkThickness = new.linkThickness
         }
         .onChange(of: app.graphColorBy) { _, new in
             engine.colorMode = new
@@ -50,44 +53,18 @@ struct GraphView: View {
     }
 
     private var graphCanvas: some View {
-        ZStack(alignment: .topLeading) {
-            GraphCanvasRepresentable(engine: engine)
-                .clipShape(RoundedRectangle(cornerRadius: 0))
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Picker("Mode", selection: $app.graphMode) {
-                        Text("Global").tag(GraphViewMode.global)
-                        Text("Local").tag(GraphViewMode.local)
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 180)
-
-                    if app.graphMode == .local {
-                        Stepper("Depth \(app.graphLocalDepth)", value: $app.graphLocalDepth, in: 1...5)
-                            .frame(width: 140)
-                    }
-
-                    Spacer()
-
-                    Text(engine.statusText + (engine.metalActive ? " · Metal" : " · CoreGraphics"))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.ultraThinMaterial, in: Capsule())
-                }
-                .padding(12)
-
-                Spacer()
-
-                if let hover = engine.hoveredInfo {
-                    GraphHoverCard(info: hover)
-                        .padding(12)
-                        .frame(maxWidth: 360, alignment: .leading)
-                }
+        // IMPORTANT: never put a full-size SwiftUI VStack over the AppKit graph.
+        // Transparent Spacers still steal mouseMoved / cause mouseExited, which
+        // clears hover the instant the description card appears → flicker/pop.
+        GraphCanvasRepresentable(engine: engine)
+            .clipShape(RoundedRectangle(cornerRadius: 0))
+            .overlay(alignment: .topLeading) {
+                // Only as tall as the toolbar — hits pass through to the graph elsewhere.
+                graphToolbar
+                    .padding(12)
             }
-        }
+            // Hover description is drawn in AppKit (GraphNSView) so unhover never
+            // mutates SwiftUI state / re-renders controls / restarts physics.
         .contextMenu {
             if let id = engine.contextNodeID {
                 Button("Open Note") {
@@ -110,6 +87,35 @@ struct GraphView: View {
             Button("Reheat Layout") { engine.reheat() }
             Button("Export PNG…") { engine.exportPNG() }
         }
+    }
+
+    private var graphToolbar: some View {
+        HStack(spacing: 8) {
+            Picker("Mode", selection: $app.graphMode) {
+                Text("Global").tag(GraphViewMode.global)
+                Text("Local").tag(GraphViewMode.local)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 180)
+
+            if app.graphMode == .local {
+                Stepper("Depth \(app.graphLocalDepth)", value: $app.graphLocalDepth, in: 1...5)
+                    .frame(width: 140)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(engine.statusText + (engine.metalActive ? " · Metal" : " · CoreGraphics"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .allowsHitTesting(false)
+        }
+        // Toolbar is only the top strip; don't expand to fill the canvas.
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func rebuild() {
@@ -140,12 +146,19 @@ struct GraphView: View {
         engine.physics = app.graphPhysics
         engine.linkThickness = app.graphPhysics.linkThickness
         engine.useMetal = app.useMetalGraph
+        // Seed from vault-persisted positions so layout doesn't re-explode every open.
+        if engine.storedPositions.isEmpty, !app.graphPositions.isEmpty {
+            engine.seedPositions(app.graphPositions)
+        }
         let isFirstLoad = engine.renderNodes.isEmpty
         engine.load(snapshot)
         engine.onOpenNode = { id in
             if !id.hasPrefix("tag:"), !id.hasPrefix("unresolved:") {
                 app.openNote(path: id)
             }
+        }
+        engine.onPositionsSettled = { [weak app] positions in
+            app?.persistGraphPositions(positions)
         }
         // Obsidian-like: frame the graph when first opening or after a full rebuild.
         if isFirstLoad {
@@ -168,77 +181,115 @@ struct GraphHoverInfo: Equatable {
     var summary: String?
 }
 
-private struct GraphHoverCard: View {
-    let info: GraphHoverInfo
+/// AppKit hover card — lives inside GraphNSView so hover never re-renders SwiftUI.
+final class GraphHoverCardNSView: NSView {
+    private let titleLabel = NSTextField(labelWithString: "")
+    private let metaLabel = NSTextField(labelWithString: "")
+    private let pathLabel = NSTextField(labelWithString: "")
+    private let summaryLabel = NSTextField(wrappingLabelWithString: "")
+    private let tagsLabel = NSTextField(labelWithString: "")
+    private let stack = NSStackView()
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(info.title)
-                .font(.system(.callout, design: .rounded).weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(2)
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        layer?.backgroundColor = NSColor.controlBackgroundColor.withAlphaComponent(0.92).cgColor
+        layer?.borderColor = NSColor.separatorColor.cgColor
+        layer?.borderWidth = 1
+        layer?.shadowOpacity = 0.25
+        layer?.shadowRadius = 8
+        layer?.shadowOffset = CGSize(width: 0, height: -2)
 
-            HStack(spacing: 6) {
-                Text(info.kindLabel)
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.accentColor.opacity(0.18), in: Capsule())
-                Text("\(info.degree) link\(info.degree == 1 ? "" : "s")")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                if !info.folder.isEmpty {
-                    Text("·")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                    Text(info.folder)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.maximumNumberOfLines = 2
 
-            if let path = info.path, !path.isEmpty {
-                Text(path)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.tertiary)
-                    .lineLimit(2)
-                    .textSelection(.enabled)
-            }
+        metaLabel.font = .systemFont(ofSize: 11)
+        metaLabel.textColor = .secondaryLabelColor
 
-            if let summary = info.summary, !summary.isEmpty {
-                Text(summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .lineLimit(4)
-            }
+        pathLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        pathLabel.textColor = .tertiaryLabelColor
+        pathLabel.lineBreakMode = .byTruncatingMiddle
+        pathLabel.maximumNumberOfLines = 2
 
-            if !info.tags.isEmpty {
-                Text(info.tags.prefix(6).map { "#\($0)" }.joined(separator: " "))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
+        summaryLabel.font = .systemFont(ofSize: 11)
+        summaryLabel.textColor = .secondaryLabelColor
+        summaryLabel.maximumNumberOfLines = 4
+
+        tagsLabel.font = .systemFont(ofSize: 10)
+        tagsLabel.textColor = .secondaryLabelColor
+        tagsLabel.lineBreakMode = .byTruncatingTail
+
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 4
+        stack.edgeInsets = NSEdgeInsets(top: 10, left: 12, bottom: 10, right: 12)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        [titleLabel, metaLabel, pathLabel, summaryLabel, tagsLabel].forEach { stack.addArrangedSubview($0) }
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Never steal hover/clicks from the graph canvas.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func height(forWidth width: CGFloat) -> CGFloat {
+        let inner = width - 24
+        var h: CGFloat = 20 // padding
+        h += titleLabel.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: inner, height: 10_000)).height ?? 18
+        h += 4 + 14
+        if !pathLabel.isHidden {
+            h += 4 + (pathLabel.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: inner, height: 10_000)).height ?? 12)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+        if !summaryLabel.isHidden {
+            h += 4 + (summaryLabel.cell?.cellSize(forBounds: NSRect(x: 0, y: 0, width: inner, height: 10_000)).height ?? 36)
+        }
+        if !tagsLabel.isHidden { h += 4 + 12 }
+        return min(max(h, 56), 200)
+    }
+
+    func apply(_ info: GraphHoverInfo) {
+        titleLabel.stringValue = info.title
+        var meta = "\(info.kindLabel) · \(info.degree) link\(info.degree == 1 ? "" : "s")"
+        if !info.folder.isEmpty { meta += " · \(info.folder)" }
+        metaLabel.stringValue = meta
+        if let path = info.path, !path.isEmpty {
+            pathLabel.stringValue = path
+            pathLabel.isHidden = false
+        } else {
+            pathLabel.isHidden = true
+        }
+        if let summary = info.summary, !summary.isEmpty {
+            summaryLabel.stringValue = summary
+            summaryLabel.isHidden = false
+        } else {
+            summaryLabel.isHidden = true
+        }
+        if info.tags.isEmpty {
+            tagsLabel.isHidden = true
+        } else {
+            tagsLabel.stringValue = info.tags.prefix(6).map { "#\($0)" }.joined(separator: " ")
+            tagsLabel.isHidden = false
+        }
+        needsLayout = true
     }
 }
 
 // MARK: - View model
 
 final class GraphViewModel: ObservableObject {
-    @Published var hoveredInfo: GraphHoverInfo?
-    /// Legacy single-line string for any callers; prefer `hoveredInfo`.
-    @Published var hoveredLabel: String?
+    /// Hover is AppKit-only (no SwiftUI publish).
+    private(set) var hoveredInfo: GraphHoverInfo?
+    var hoveredLabel: String?
     @Published var statusText = "0 nodes"
     @Published var contextNodeID: String?
 
@@ -248,6 +299,13 @@ final class GraphViewModel: ObservableObject {
     var linkThickness: Double = 1
     var useMetal = true
     var onOpenNode: ((String) -> Void)?
+    /// Called when physics settles — persist layout across launches.
+    var onPositionsSettled: (([String: SIMD2<Double>]) -> Void)?
+
+    func setHoverInfo(_ info: GraphHoverInfo?) {
+        hoveredInfo = info
+        hostView?.updateHoverCard(info)
+    }
 
     let simulator = ForceSimulator()
     let metal = MetalGraphRenderer()
@@ -262,8 +320,14 @@ final class GraphViewModel: ObservableObject {
     var offset: CGSize = .zero
     private var displayLink: CVDisplayLink?
     private var positions: [String: SIMD2<Double>] = [:]
+    /// Read-only access for seeding from vault store.
+    var storedPositions: [String: SIMD2<Double>] { positions }
     weak var hostView: GraphNSView?
     private var timer: Timer?
+
+    func seedPositions(_ seed: [String: SIMD2<Double>]) {
+        positions = seed
+    }
 
     var metalActive: Bool { useMetal && metal.isAvailable }
 
@@ -301,9 +365,29 @@ final class GraphViewModel: ObservableObject {
     }
 
     func load(_ snapshot: GraphSnapshot) {
+        // Soft path: same nodes+edges → refresh labels/degrees only. Never reheat.
+        // (FSEvents / hover used to call load repeatedly and explode the layout.)
+        if topologyMatches(snapshot), !renderNodes.isEmpty {
+            self.snapshot = snapshot
+            positions = simulator.positions()
+            rebuildRenderModel()
+            let n = snapshot.nodes.count
+            let e = snapshot.edges.count
+            let drawn = maxDrawnEdges
+            statusText = e > drawn
+                ? "\(n) nodes · \(e) links · drawing \(drawn)"
+                : "\(n) nodes · \(e) links"
+            hostView?.needsDisplay = true
+            return
+        }
+
         self.snapshot = snapshot
         simulator.settings = physics
         let hadPositions = !positions.isEmpty
+        // Capture live sim positions before reload so we don't reseed the disc.
+        if !simulator.nodes.isEmpty {
+            positions = simulator.positions()
+        }
         simulator.load(snapshot: snapshot, preservePositions: positions)
         rebuildRenderModel()
         let n = snapshot.nodes.count
@@ -318,7 +402,20 @@ final class GraphViewModel: ObservableObject {
         if !hadPositions {
             didAutoFitThisRun = false
         }
+        // Only kick physics hard when we truly had no layout yet.
+        if hadPositions {
+            simulator.reheat(energy: 0.15)
+        }
         startLoop()
+    }
+
+    private func topologyMatches(_ snapshot: GraphSnapshot) -> Bool {
+        let oldN = Set(self.snapshot.nodes.map(\.id))
+        let newN = Set(snapshot.nodes.map(\.id))
+        guard oldN == newN else { return false }
+        let oldE = Set(self.snapshot.edges.map(\.id))
+        let newE = Set(snapshot.edges.map(\.id))
+        return oldE == newE
     }
 
     func reheat(energy: Double = 1) {
@@ -334,10 +431,12 @@ final class GraphViewModel: ObservableObject {
     func applyDefaultPhysicsAndRelayout() {
         physics = GraphPhysicsSettings()
         linkThickness = physics.linkThickness
-        positions.removeAll(keepingCapacity: true)
+        // Keep current positions so Defaults doesn't fling the map across the screen.
+        positions = simulator.positions()
         didAutoFitThisRun = false
         simulator.settings = physics
-        simulator.load(snapshot: snapshot, preservePositions: [:])
+        simulator.load(snapshot: snapshot, preservePositions: positions)
+        simulator.reheat(energy: 0.55)
         rebuildRenderModel()
         startLoop()
         DispatchQueue.main.async { [weak self] in
@@ -432,7 +531,9 @@ final class GraphViewModel: ObservableObject {
     }
 
     private func startLoop() {
-        stopLoop()
+        // Kill timer only — do NOT persist here. Persisting on every restart wrote
+        // `.nexus/index.sqlite`, which FSEvents treated as a vault change → rebuild loop.
+        invalidateTimerOnly()
         // Adaptive rate: huge graphs can't pay for 60 full force+draw frames.
         let e = max(snapshot.edges.count, renderEdges.count)
         let n = max(snapshot.nodes.count, renderNodes.count)
@@ -451,15 +552,21 @@ final class GraphViewModel: ObservableObject {
         timer = t
     }
 
-    private func stopLoop() {
+    private func invalidateTimerOnly() {
         timer?.invalidate()
         timer = nil
         if let displayLink {
             CVDisplayLinkStop(displayLink)
             self.displayLink = nil
         }
-        // Persist positions when the sim settles (for layout continuity).
+    }
+
+    private func stopLoop(persist: Bool = true) {
+        invalidateTimerOnly()
+        // Persist only when the sim truly settles — never on timer restart.
+        guard persist else { return }
         positions = simulator.positions()
+        onPositionsSettled?(positions)
     }
 
     private var didAutoFitThisRun = false
@@ -630,9 +737,51 @@ final class GraphNSView: NSView {
     private var neighbors: Set<String> = []
     private var trackingArea: NSTrackingArea?
     private var metalAttached = false
+    /// Sticky hover: don't clear the moment the cursor leaves a tiny node.
+    private var hoverClearWorkItem: DispatchWorkItem?
+    private var lastHoverPoint: CGPoint = .zero
+    /// AppKit hover description — never goes through SwiftUI.
+    private var hoverCardView: GraphHoverCardNSView?
 
     /// Pixels of movement before a press is treated as drag (not a click).
     private let dragThreshold: CGFloat = 4
+    /// Extra hit radius so labels / slight drift don't drop hover.
+    private let hoverSlop: CGFloat = 14
+    /// Delay before clearing hover (avoids card flicker / mouseExited noise).
+    private let hoverClearDelay: TimeInterval = 0.12
+
+    /// Update floating description card without touching SwiftUI / physics.
+    func updateHoverCard(_ info: GraphHoverInfo?) {
+        if let info {
+            let card = hoverCardView ?? {
+                let c = GraphHoverCardNSView(frame: .zero)
+                // Must not intercept mouse — otherwise unhover/pop loops return.
+                c.wantsLayer = true
+                addSubview(c)
+                hoverCardView = c
+                return c
+            }()
+            card.isHidden = false
+            card.apply(info)
+            layoutHoverCard()
+        } else {
+            hoverCardView?.isHidden = true
+        }
+    }
+
+    private func layoutHoverCard() {
+        guard let card = hoverCardView, !card.isHidden else { return }
+        let width = min(max(280, 220), min(bounds.width - 24, 360))
+        let height = card.height(forWidth: width)
+        let x: CGFloat = 12
+        let y: CGFloat = max(12, bounds.height - height - 12) // bottom-leading (isFlipped)
+        card.frame = CGRect(x: x, y: y, width: width, height: height)
+    }
+
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        super.resizeSubviews(withOldSize: oldSize)
+        layoutHoverCard()
+    }
 
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
@@ -678,13 +827,13 @@ final class GraphNSView: NSView {
     }
 
     override func mouseExited(with event: NSEvent) {
-        if hovered != nil {
-            hovered = nil
-            neighbors = []
-            engine?.hoveredLabel = nil
-            engine?.hoveredInfo = nil
-            needsDisplay = true
-        }
+        // Don't clear immediately — overlays / brief exits used to pop the card.
+        scheduleHoverClear()
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hoverClearWorkItem?.cancel()
+        hoverClearWorkItem = nil
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -734,12 +883,13 @@ final class GraphNSView: NSView {
             let p1 = project(s.x, s.y)
             let p2 = project(t.x, t.y)
 
-            var alpha: CGFloat = 0.22
+            // Subtle focus — never bury the rest of the map (unhover used to feel like an explosion).
+            var alpha: CGFloat = 0.28
             if fadeOthers {
                 if let h = hovered, edge.source == h || edge.target == h {
-                    alpha = 0.75
+                    alpha = 0.85
                 } else {
-                    alpha = 0.04
+                    alpha = 0.14
                 }
             }
 
@@ -758,7 +908,7 @@ final class GraphNSView: NSView {
                 if node.id == hovered || neighbors.contains(node.id) {
                     alpha = 1
                 } else {
-                    alpha = 0.12
+                    alpha = 0.55
                 }
             }
 
@@ -795,7 +945,7 @@ final class GraphNSView: NSView {
                 if node.id == hovered || neighbors.contains(node.id) {
                     alpha = 1
                 } else {
-                    alpha = 0.12
+                    alpha = 0.45
                 }
             }
             let r = max(3, node.radius * (scale < 0.5 ? 0.8 : 1))
@@ -894,41 +1044,78 @@ final class GraphNSView: NSView {
 
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        let id = hitNode(at: p)
-        if id != hovered {
-            hovered = id
-            if let id, let node = engine?.renderNodes.first(where: { $0.id == id }) {
-                let kindLabel: String = {
-                    switch node.kind {
-                    case .note: return "Note"
-                    case .tag: return "Tag"
-                    case .attachment: return "File"
-                    case .unresolved: return "Missing"
-                    }
-                }()
-                let info = GraphHoverInfo(
-                    title: node.label,
-                    path: node.path,
-                    kindLabel: kindLabel,
-                    degree: node.degree,
-                    folder: node.folder,
-                    tags: node.tags,
-                    summary: node.summary
-                )
-                engine?.hoveredInfo = info
-                var line = "\(node.label)  ·  \(node.degree) links"
-                if let s = node.summary, !s.isEmpty {
-                    line += "  ·  \(s)"
-                }
-                engine?.hoveredLabel = line
-                neighbors = neighborSet(of: id)
-            } else {
-                engine?.hoveredLabel = nil
-                engine?.hoveredInfo = nil
-                neighbors = []
-            }
-            needsDisplay = true
+        lastHoverPoint = p
+        // Prefer current hover while still near it (sticky), then normal hit-test.
+        let id = stickyHoverID(at: p) ?? hitNode(at: p, slop: hoverSlop)
+        applyHover(id)
+    }
+
+    private func scheduleHoverClear() {
+        hoverClearWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.applyHover(nil)
         }
+        hoverClearWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + hoverClearDelay, execute: work)
+    }
+
+    private func applyHover(_ id: String?) {
+        if id != nil {
+            hoverClearWorkItem?.cancel()
+            hoverClearWorkItem = nil
+        }
+        guard id != hovered else { return }
+        hovered = id
+        if let id, let node = engine?.renderNodes.first(where: { $0.id == id }) {
+            let kindLabel: String = {
+                switch node.kind {
+                case .note: return "Note"
+                case .tag: return "Tag"
+                case .attachment: return "File"
+                case .unresolved: return "Missing"
+                }
+            }()
+            engine?.setHoverInfo(GraphHoverInfo(
+                title: node.label,
+                path: node.path,
+                kindLabel: kindLabel,
+                degree: node.degree,
+                folder: node.folder,
+                tags: node.tags,
+                summary: node.summary
+            ))
+            var line = "\(node.label)  ·  \(node.degree) links"
+            if let s = node.summary, !s.isEmpty {
+                line += "  ·  \(s)"
+            }
+            engine?.hoveredLabel = line
+            neighbors = neighborSet(of: id)
+        } else {
+            engine?.hoveredLabel = nil
+            engine?.setHoverInfo(nil)
+            neighbors = []
+        }
+        needsDisplay = true
+    }
+
+    /// Keep the same node hovered while the cursor stays near it (including over its label area).
+    private func stickyHoverID(at p: CGPoint) -> String? {
+        guard let current = hovered, let engine else { return nil }
+        guard let node = engine.renderNodes.first(where: { $0.id == current }) else { return nil }
+        let scale = engine.scale
+        let ox = bounds.midX + engine.offset.width
+        let oy = bounds.midY + engine.offset.height
+        let cx = ox + CGFloat(node.x) * scale
+        let cy = oy + CGFloat(node.y) * scale
+        let r = max(3, CGFloat(node.radius) * (scale < 0.5 ? 0.8 : 1))
+        // Generous stick region: node + label band below + slop.
+        let stickR = r + hoverSlop + 18
+        let dx = p.x - cx
+        let dy = p.y - cy
+        // Circle around node, plus a tall ellipse downward for labels.
+        if hypot(dx, dy) <= stickR { return current }
+        if abs(dx) <= stickR && dy >= -r && dy <= r + 36 { return current }
+        return nil
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -992,7 +1179,7 @@ final class GraphNSView: NSView {
         return (Double(x), Double(y))
     }
 
-    private func hitNode(at p: CGPoint) -> String? {
+    private func hitNode(at p: CGPoint, slop: CGFloat = 0) -> String? {
         guard let engine else { return nil }
         let scale = engine.scale
         let ox = bounds.midX + engine.offset.width
@@ -1001,7 +1188,7 @@ final class GraphNSView: NSView {
         for node in engine.renderNodes.reversed() {
             let px = ox + node.x * scale
             let py = oy + node.y * scale
-            let r = max(6, node.radius * scale + 4)
+            let r = max(6, node.radius * scale + 4) + slop
             let dx = p.x - px
             let dy = p.y - py
             if dx * dx + dy * dy <= r * r {
@@ -1056,7 +1243,9 @@ struct GraphControlsPanel: View {
                             .help("GPU nodes/edges via Metal; falls back to CoreGraphics if unavailable")
                         HStack {
                             Text("Link thickness")
-                            Slider(value: $app.graphPhysics.linkThickness, in: 0.4...3)
+                            Slider(value: $app.graphPhysics.linkThickness, in: 0.4...3) { editing in
+                                if !editing { engine.reheat(energy: 0.25) }
+                            }
                         }
                     }
                     .padding(4)
@@ -1064,12 +1253,12 @@ struct GraphControlsPanel: View {
 
                 GroupBox("Physics") {
                     VStack(alignment: .leading, spacing: 8) {
-                        slider("Repulsion", value: $app.graphPhysics.repulsion, range: 400...8000)
-                        slider("Center (fit COM)", value: $app.graphPhysics.centerForce, range: 0...1)
-                        slider("Spring length", value: $app.graphPhysics.springLength, range: 40...280)
-                        slider("Spring strength", value: $app.graphPhysics.springStrength, range: 0.005...0.12)
-                        slider("Damping", value: $app.graphPhysics.damping, range: 0.4...0.92)
-                        slider("Animation", value: $app.graphPhysics.animationStrength, range: 0.2...2)
+                        physicsSlider("Repulsion", value: $app.graphPhysics.repulsion, range: 400...8000)
+                        physicsSlider("Center (fit COM)", value: $app.graphPhysics.centerForce, range: 0...1)
+                        physicsSlider("Spring length", value: $app.graphPhysics.springLength, range: 40...280)
+                        physicsSlider("Spring strength", value: $app.graphPhysics.springStrength, range: 0.005...0.12)
+                        physicsSlider("Damping", value: $app.graphPhysics.damping, range: 0.4...0.92)
+                        physicsSlider("Animation", value: $app.graphPhysics.animationStrength, range: 0.2...2)
                         HStack {
                             Button("Reheat") { engine.reheat() }
                             Button("Fit to view") { engine.fitToView() }
@@ -1117,10 +1306,21 @@ struct GraphControlsPanel: View {
         .background(.ultraThinMaterial)
     }
 
-    private func slider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+    /// Physics sliders reheat only when the user finishes dragging — never on view refresh.
+    private func physicsSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.caption).foregroundStyle(.secondary)
-            Slider(value: value, in: range)
+            Slider(value: value, in: range) { editing in
+                if !editing {
+                    engine.physics = app.graphPhysics
+                    engine.simulator.settings = app.graphPhysics
+                    engine.reheat(energy: 0.35)
+                } else {
+                    // Live preview of knobs without full reheat thrash.
+                    engine.physics = app.graphPhysics
+                    engine.simulator.settings = app.graphPhysics
+                }
+            }
         }
     }
 

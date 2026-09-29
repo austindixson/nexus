@@ -25,7 +25,11 @@ struct EditorWorkspaceView: View {
                 set: { app.updateDraft($0) }
             ), onCommandClick: openWikiTarget)
         case .livePreview:
-            MarkdownPreview(content: app.draftContent, title: app.currentNote?.title ?? "")
+            MarkdownPreview(
+                content: app.draftContent,
+                title: app.currentNote?.title ?? "",
+                postProcess: app.pluginHost.markdownProcessor
+            )
                 .onOpenWikiLink(openWikiTarget)
         case .split:
             HSplitView {
@@ -35,7 +39,11 @@ struct EditorWorkspaceView: View {
                 ), onCommandClick: openWikiTarget)
                 .frame(minWidth: 280)
 
-                MarkdownPreview(content: app.draftContent, title: app.currentNote?.title ?? "")
+                MarkdownPreview(
+                    content: app.draftContent,
+                    title: app.currentNote?.title ?? "",
+                    postProcess: app.pluginHost.markdownProcessor
+                )
                     .onOpenWikiLink(openWikiTarget)
                     .frame(minWidth: 280)
             }
@@ -309,6 +317,7 @@ extension View {
 struct MarkdownPreview: NSViewRepresentable {
     let content: String
     let title: String
+    var postProcess: ((String) -> String)? = nil
     @Environment(\.openWikiLink) private var openWikiLink
 
     func makeCoordinator() -> Coordinator {
@@ -324,7 +333,7 @@ struct MarkdownPreview: NSViewRepresentable {
         context.coordinator.open = { [openWikiLink] target in
             openWikiLink?(target)
         }
-        let html = MarkdownParser.renderPreviewHTML(content, title: title)
+        let html = MarkdownParser.renderPreviewHTML(processedContent, title: title)
         web.loadHTMLString(html, baseURL: Self.katexBaseURL)
         return web
     }
@@ -333,8 +342,12 @@ struct MarkdownPreview: NSViewRepresentable {
         context.coordinator.open = { [openWikiLink] target in
             openWikiLink?(target)
         }
-        let html = MarkdownParser.renderPreviewHTML(content, title: title)
+        let html = MarkdownParser.renderPreviewHTML(processedContent, title: title)
         web.loadHTMLString(html, baseURL: Self.katexBaseURL)
+    }
+
+    private var processedContent: String {
+        postProcess?(content) ?? content
     }
 
     /// Base URL for offline KaTeX assets (Xcode flattens Resources/katex/* into Resources/).

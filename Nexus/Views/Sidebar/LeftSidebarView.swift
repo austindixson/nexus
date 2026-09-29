@@ -6,29 +6,38 @@ struct LeftSidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $app.leftSidebarTab) {
-                ForEach(LeftSidebarTab.allCases) { tab in
-                    Image(systemName: tab.systemImage).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .padding(8)
+            SidebarIconBar(
+                items: LeftSidebarTab.allCases.map {
+                    SidebarIconBarItem(id: $0.rawValue, title: $0.title, systemImage: $0.systemImage)
+                },
+                selection: Binding(
+                    get: { app.leftSidebarTab.rawValue },
+                    set: { if let t = LeftSidebarTab(rawValue: $0) { app.leftSidebarTab = t } }
+                )
+            )
+            .padding(.horizontal, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
 
             Divider()
 
-            switch app.leftSidebarTab {
-            case .files:
-                FileExplorerView()
-            case .search:
-                VaultSearchView()
-            case .tags:
-                TagsView()
-            case .outline:
-                OutlineView()
+            Group {
+                switch app.leftSidebarTab {
+                case .files:
+                    FileExplorerView()
+                case .search:
+                    VaultSearchView()
+                case .tags:
+                    TagsView()
+                case .outline:
+                    OutlineView()
+                case .sync:
+                    SyncSidebarView()
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .background(.ultraThinMaterial)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
@@ -44,6 +53,12 @@ struct FileExplorerView: View {
                 Text(app.vault.rootURL?.lastPathComponent ?? "Vault")
                     .font(.headline)
                     .lineLimit(1)
+                if app.vault.isICloudVault {
+                    Image(systemName: "icloud.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .help("iCloud Drive vault")
+                }
                 Spacer()
                 Button {
                     app.createNote()
@@ -63,6 +78,19 @@ struct FileExplorerView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
+
+            if !app.vault.conflictCopyPaths.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("\(app.vault.conflictCopyPaths.count) possible conflict copies")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
+                .help("iCloud/simultaneous-edit copies like “Note 2.md”. Open Settings → About for the list.")
+            }
 
             List(selection: Binding(
                 get: { app.selectedPath },
@@ -172,7 +200,7 @@ struct VaultSearchView: View {
                 .padding(10)
                 .focused($focused)
                 .onChange(of: query) { _, new in
-                    hits = SearchService.search(query: new, notes: app.vault.notes)
+                    hits = SearchService.search(query: new, notes: app.vault.notes, index: app.vault.indexStore)
                 }
                 .onChange(of: app.focusSearchToken) { _, _ in
                     focused = true

@@ -3,6 +3,7 @@ import Combine
 import AppKit
 
 /// Local-first vault: pure folders of Markdown + attachments, with FSEvents live reload.
+/// Incremental note updates + SQLite FTS sidecar (`.nexus/index.sqlite`).
 @MainActor
 final class VaultService: ObservableObject {
     @Published private(set) var rootURL: URL?
@@ -12,10 +13,15 @@ final class VaultService: ObservableObject {
     @Published private(set) var noteCount = 0
     @Published private(set) var lastError: String?
 
+    /// Per-vault SQLite index (FTS + graph positions). Nil when no vault open.
+    private(set) var indexStore: VaultIndexStore?
+
     private var watcher: DirectoryWatcher?
     private var bookmarkData: Data?
     private let fm = FileManager.default
     private var reloadTask: Task<Void, Never>?
+    /// Suppress FSEvents-driven full rescans while we write from this process.
+    private var suppressWatcherUntil: Date = .distantPast
 
     nonisolated static let supportedNoteExtensions: Set<String> = ["md", "markdown"]
     nonisolated static let attachmentExtensions: Set<String> = [
@@ -29,6 +35,20 @@ final class VaultService: ObservableObject {
 
     // MARK: - Open / close
 
+    /// Called after any vault content mutation (create/save/rename/delete or
+    /// FSEvents rescan). GitSyncService uses this to schedule debounced autocommits.
+    var onNoteMutated: ((String) -> Void)?
+
+    /// Called after Nexus persists workspace state into `<vault>/.nexus/workspace.json`
+    /// (last vault path, tabs, layout). GitSyncService uses this to keep that
+    /// machine-local file out of every sync commit.
+    var onWorkspaceSaved: ((String) -> Void)?
+
+    /// Path of the per-vault workspace sidecar (relative to vault root).
+    nonisolated static func workspaceSidecarPath(for vaultRoot: URL) -> String {
+        ".nexus/workspace.json"
+    }
+
     func openVault(at url: URL) {
         closeVault()
         let standardized = url.standardizedFileURL
@@ -37,7 +57,6 @@ final class VaultService: ObservableObject {
             return
         }
 
-        // Security-scoped bookmark for relaunch
         do {
             bookmarkData = try standardized.bookmarkData(
                 options: [.withSecurityScope],
@@ -47,12 +66,25 @@ final class VaultService: ObservableObject {
             UserDefaults.standard.set(bookmarkData, forKey: "nexus.vaultBookmark")
             UserDefaults.standard.set(standardized.path, forKey: "nexus.vaultPath")
         } catch {
-            // Still proceed for non-sandboxed runs
             UserDefaults.standard.set(standardized.path, forKey: "nexus.vaultPath")
         }
 
         _ = standardized.startAccessingSecurityScopedResource()
         rootURL = standardized
+
+        let store = VaultIndexStore()
+        do {
+            try store.open(vaultRoot: standardized)
+            indexStore = store
+        } catch {
+            lastError = "Index open failed: \(error.localizedDescription)"
+            indexStore = nil
+        }
+
+        WorkspaceService.onVaultWorkspaceSaved = { [weak self] path in
+            self?.onWorkspaceSaved?(path)
+        }
+
         fullRescan()
         startWatching()
     }
@@ -84,6 +116,8 @@ final class VaultService: ObservableObject {
         if let rootURL {
             rootURL.stopAccessingSecurityScopedResource()
         }
+        indexStore?.close()
+        indexStore = nil
         rootURL = nil
         tree = []
         notes = [:]
@@ -96,22 +130,80 @@ final class VaultService: ObservableObject {
         guard let root = rootURL else { return }
         isIndexing = true
         lastError = nil
+        let previous = notes
+        // Prefer in-memory mtimes; fall back to SQLite for cold start.
+        var cachedMtimes = Dictionary(uniqueKeysWithValues: previous.map { ($0.key, $0.value.modified) })
+        if cachedMtimes.isEmpty {
+            cachedMtimes = indexStore?.modifiedTimes() ?? [:]
+        }
 
         Task.detached(priority: .userInitiated) { [weak self] in
             guard let self else { return }
-            let result = await self.scanVault(root: root)
+            let result = await self.scanVault(root: root, cachedMtimes: cachedMtimes, previousNotes: previous)
             await MainActor.run {
+                var merged = result.notes
+                for path in result.unchangedPaths {
+                    if merged[path] == nil, let old = previous[path] {
+                        merged[path] = old
+                    }
+                }
                 self.tree = result.tree
-                self.notes = result.notes
-                self.noteCount = result.notes.count
+                self.notes = merged
+                self.noteCount = merged.count
                 self.isIndexing = false
+                self.syncIndex(with: merged)
             }
         }
     }
 
-    nonisolated private func scanVault(root: URL) async -> (tree: [VaultNode], notes: [String: NoteDocument]) {
+    /// Incremental rescan: only reparse notes whose mtime changed.
+    /// Marker passed to onNoteMutated for "the tree changed" events (vs a specific path).
+    static let rescanChangeToken = "__rescan__"
+
+    func incrementalRescan() {
+        guard let root = rootURL else { return }
+        isIndexing = true
+        let previous = notes
+        let cachedMtimes = Dictionary(uniqueKeysWithValues: previous.map { ($0.key, $0.value.modified) })
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            let result = await self.scanVault(root: root, cachedMtimes: cachedMtimes, previousNotes: previous)
+            await MainActor.run {
+                var merged = previous
+                // Remove deleted
+                let stillPresent = Set(result.notes.keys).union(result.unchangedPaths)
+                for path in merged.keys where !stillPresent.contains(path) {
+                    merged.removeValue(forKey: path)
+                    self.indexStore?.removeNote(path: path)
+                }
+                // Apply changed
+                for (path, doc) in result.notes {
+                    merged[path] = doc
+                }
+                self.tree = result.tree
+                self.notes = merged
+                self.noteCount = merged.count
+                self.isIndexing = false
+                self.syncIndex(with: merged)
+                // Notify only when the scan changed something, so a git pull (which
+                // lands as external file changes) schedules a re-commit of merged
+                // state while pure watcher churn stays silent.
+                if merged != previous {
+                    self.onNoteMutated?(VaultService.rescanChangeToken)
+                }
+            }
+        }
+    }
+
+    nonisolated private func scanVault(
+        root: URL,
+        cachedMtimes: [String: Date],
+        previousNotes: [String: NoteDocument]
+    ) async -> (tree: [VaultNode], notes: [String: NoteDocument], unchangedPaths: Set<String>) {
         let fm = FileManager.default
         var notes: [String: NoteDocument] = [:]
+        var unchanged = Set<String>()
         let rootPath = root.standardizedFileURL.path
 
         func relative(of url: URL) -> String {
@@ -138,8 +230,9 @@ final class VaultService: ObservableObject {
                 let values = try? child.resourceValues(forKeys: Set(keys))
                 if values?.isHidden == true { continue }
                 let name = child.lastPathComponent
-                if name.hasPrefix(".") { continue }
-                if name == ".nexus" || name == ".obsidian" { continue } // allow reading later; hide from tree root clutter optionally
+                if CloudVaultSupport.shouldSkipFile(name: name) { continue }
+                if name == ".nexus" || name == ".obsidian" { continue }
+                // Conflict copies still appear in tree but tagged via name (user can merge).
 
                 let rel = relative(of: child)
                 let isDir = values?.isDirectory == true
@@ -151,7 +244,22 @@ final class VaultService: ObservableObject {
                 } else {
                     let ext = child.pathExtension.lowercased()
                     if Self.supportedNoteExtensions.contains(ext) {
-                        if let doc = loadNote(at: child, relativePath: rel) {
+                        let mtime = modified ?? .distantPast
+                        if let cached = cachedMtimes[rel],
+                           abs(cached.timeIntervalSince1970 - mtime.timeIntervalSince1970) < 0.501,
+                           previousNotes[rel] != nil || cachedMtimes[rel] != nil {
+                            // Skip reparse — caller merges previous content
+                            unchanged.insert(rel)
+                            // Still need a placeholder if previousNotes empty (full scan first open with index mtimes)
+                            if let prev = previousNotes[rel] {
+                                notes[rel] = prev
+                                unchanged.insert(rel)
+                            } else if let doc = loadNote(at: child, relativePath: rel) {
+                                // Have mtime in SQLite but not memory — load once
+                                notes[rel] = doc
+                            }
+                            nodes.append(VaultNode(id: rel, name: name, kind: .note, children: [], modified: modified))
+                        } else if let doc = loadNote(at: child, relativePath: rel) {
                             notes[rel] = doc
                             nodes.append(VaultNode(id: rel, name: name, kind: .note, children: [], modified: modified))
                         }
@@ -166,10 +274,11 @@ final class VaultService: ObservableObject {
         }
 
         let tree = walk(root)
-        return (tree, notes)
+        return (tree, notes, unchanged)
     }
 
     nonisolated private func loadNote(at url: URL, relativePath: String) -> NoteDocument? {
+        CloudVaultSupport.ensureDownloaded(at: url)
         guard let data = try? Data(contentsOf: url),
               let content = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1)
         else { return nil }
@@ -193,6 +302,36 @@ final class VaultService: ObservableObject {
             outgoingLinks: links,
             headings: headings
         )
+    }
+
+    private func syncIndex(with notes: [String: NoteDocument]) {
+        guard let indexStore else { return }
+        for (path, note) in notes {
+            indexStore.upsertNote(
+                path: path,
+                title: note.title,
+                folder: note.folderPath,
+                tags: note.tags,
+                modified: note.modified,
+                content: note.content
+            )
+        }
+        indexStore.removeNotes(notIn: Set(notes.keys))
+    }
+
+    private func upsertIndex(for path: String, doc: NoteDocument) {
+        indexStore?.upsertNote(
+            path: path,
+            title: doc.title,
+            folder: doc.folderPath,
+            tags: doc.tags,
+            modified: doc.modified,
+            content: doc.content
+        )
+    }
+
+    private func markSelfWrite() {
+        suppressWatcherUntil = Date().addingTimeInterval(0.6)
     }
 
     // MARK: - CRUD
@@ -237,11 +376,21 @@ final class VaultService: ObservableObject {
 
         """
         do {
-            try body.write(to: url, atomically: true, encoding: .utf8)
+            if !folder.isEmpty {
+                try fm.createDirectory(
+                    at: root.appendingPathComponent(folder),
+                    withIntermediateDirectories: true
+                )
+            }
+            markSelfWrite()
+            try CloudVaultSupport.atomicWrite(body, to: url)
             if let doc = loadNote(at: url, relativePath: rel) {
                 notes[rel] = doc
+                noteCount = notes.count
+                upsertIndex(for: rel, doc: doc)
+                patchTreeInsertNote(path: rel, name: fileName, modified: doc.modified)
             }
-            fullRescan()
+            onNoteMutated?(rel)
             return rel
         } catch {
             lastError = error.localizedDescription
@@ -255,8 +404,9 @@ final class VaultService: ObservableObject {
         let rel = folder.isEmpty ? name : (folder as NSString).appendingPathComponent(name)
         let url = root.appendingPathComponent(rel)
         do {
+            markSelfWrite()
             try fm.createDirectory(at: url, withIntermediateDirectories: true)
-            fullRescan()
+            patchTreeInsertFolder(path: rel, name: name)
             return rel
         } catch {
             lastError = error.localizedDescription
@@ -267,9 +417,12 @@ final class VaultService: ObservableObject {
     func saveNote(path: String, content: String) {
         guard let url = absoluteURL(for: path) else { return }
         do {
-            try content.write(to: url, atomically: true, encoding: .utf8)
+            markSelfWrite()
+            try CloudVaultSupport.atomicWrite(content, to: url)
             if let doc = loadNote(at: url, relativePath: path) {
                 notes[path] = doc
+                upsertIndex(for: path, doc: doc)
+                onNoteMutated?(path)
             }
         } catch {
             lastError = error.localizedDescription
@@ -279,9 +432,18 @@ final class VaultService: ObservableObject {
     func deleteNode(path: String) {
         guard let url = absoluteURL(for: path) else { return }
         do {
+            markSelfWrite()
             try fm.trashItem(at: url, resultingItemURL: nil)
-            notes.removeValue(forKey: path)
-            fullRescan()
+            // Remove note and any nested paths
+            let prefix = path.hasSuffix("/") ? path : path + "/"
+            let toRemove = notes.keys.filter { $0 == path || $0.hasPrefix(prefix) }
+            for p in toRemove {
+                notes.removeValue(forKey: p)
+                indexStore?.removeNote(path: p)
+            }
+            noteCount = notes.count
+            removeFromTree(path: path)
+            onNoteMutated?(path)
         } catch {
             lastError = error.localizedDescription
         }
@@ -292,8 +454,11 @@ final class VaultService: ObservableObject {
         let parent = url.deletingLastPathComponent()
         let dest = parent.appendingPathComponent(newName)
         do {
+            markSelfWrite()
             try fm.moveItem(at: url, to: dest)
-            fullRescan()
+            // For simplicity, incremental rescan after rename (path graph changes)
+            incrementalRescan()
+            onNoteMutated?(path)
         } catch {
             lastError = error.localizedDescription
         }
@@ -307,8 +472,10 @@ final class VaultService: ObservableObject {
     func writeCanvas(path: String, document: CanvasDocument) {
         guard let url = absoluteURL(for: path) else { return }
         do {
+            markSelfWrite()
             let data = try JSONEncoder().encode(document)
             try data.write(to: url, options: .atomic)
+            onNoteMutated?(path)
         } catch {
             lastError = error.localizedDescription
         }
@@ -324,26 +491,114 @@ final class VaultService: ObservableObject {
         return doc
     }
 
+    // MARK: - Tree patches
+
+    private func patchTreeInsertNote(path: String, name: String, modified: Date?) {
+        let parentPath = (path as NSString).deletingLastPathComponent
+        let node = VaultNode(id: path, name: name, kind: .note, children: [], modified: modified)
+        if parentPath.isEmpty || parentPath == "." {
+            if !tree.contains(where: { $0.id == path }) {
+                tree.append(node)
+                tree.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            }
+            return
+        }
+        tree = insertChild(node, parentPath: parentPath, into: tree)
+    }
+
+    private func patchTreeInsertFolder(path: String, name: String) {
+        let parentPath = (path as NSString).deletingLastPathComponent
+        let node = VaultNode(id: path, name: name, kind: .folder, children: [], modified: Date())
+        if parentPath.isEmpty || parentPath == "." {
+            if !tree.contains(where: { $0.id == path }) {
+                tree.append(node)
+                tree.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            }
+            return
+        }
+        tree = insertChild(node, parentPath: parentPath, into: tree)
+    }
+
+    private func insertChild(_ node: VaultNode, parentPath: String, into nodes: [VaultNode]) -> [VaultNode] {
+        nodes.map { n in
+            var copy = n
+            if copy.id == parentPath && copy.isFolder {
+                if !copy.children.contains(where: { $0.id == node.id }) {
+                    copy.children.append(node)
+                    copy.children.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                }
+            } else if copy.isFolder {
+                copy.children = insertChild(node, parentPath: parentPath, into: copy.children)
+            }
+            return copy
+        }
+    }
+
+    private func removeFromTree(path: String) {
+        func filterNodes(_ nodes: [VaultNode]) -> [VaultNode] {
+            nodes.compactMap { n in
+                if n.id == path { return nil }
+                var copy = n
+                if copy.isFolder {
+                    copy.children = filterNodes(copy.children)
+                }
+                return copy
+            }
+        }
+        tree = filterNodes(tree)
+    }
+
     // MARK: - Watcher
 
     private func startWatching() {
         guard let root = rootURL else { return }
         watcher?.stop()
-        watcher = DirectoryWatcher(url: root) { [weak self] in
+        watcher = DirectoryWatcher(url: root) { [weak self] changedPaths in
             Task { @MainActor in
-                self?.scheduleReload()
+                self?.scheduleReload(changedPaths: changedPaths)
             }
         }
         watcher?.start()
     }
 
-    private func scheduleReload() {
-        reloadTask?.cancel()
-        reloadTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 250_000_000)
-            guard !Task.isCancelled else { return }
-            fullRescan()
+    private func scheduleReload(changedPaths: [String] = []) {
+        if Date() < suppressWatcherUntil { return }
+        // Ignore internal sidecar churn (.nexus/index.sqlite, workspace.json).
+        // Those used to FSEvent → rescan → link rebuild → graph load → physics explosion.
+        if !changedPaths.isEmpty {
+            let relevant = changedPaths.contains { path in
+                let p = path.lowercased()
+                if p.contains("/.nexus/") || p.hasSuffix("/.nexus") { return false }
+                if p.contains("/.obsidian/") || p.hasSuffix("/.obsidian") { return false }
+                if p.hasSuffix(".nexus-tmp") || p.contains(".nexus-tmp-") { return false }
+                return true
+            }
+            if !relevant { return }
         }
+        reloadTask?.cancel()
+        let delay = CloudVaultSupport.rescanDebounceNanoseconds(for: rootURL)
+        reloadTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            if Date() < suppressWatcherUntil { return }
+            incrementalRescan()
+        }
+    }
+
+    /// Suppress FSEvents briefly (e.g. while writing graph positions into `.nexus/`).
+    func suppressExternalReload(for seconds: TimeInterval = 1.0) {
+        suppressWatcherUntil = Date().addingTimeInterval(seconds)
+    }
+
+    /// True when vault lives under iCloud Drive / ubiquitous container.
+    var isICloudVault: Bool {
+        guard let rootURL else { return false }
+        return CloudVaultSupport.isLikelyICloudVault(rootURL)
+    }
+
+    /// Notes that look like conflict copies (for UI surfacing).
+    var conflictCopyPaths: [String] {
+        notes.keys.filter { CloudVaultSupport.isConflictCopy(name: ($0 as NSString).lastPathComponent) }.sorted()
     }
 
     private func formattedStamp() -> String {
@@ -358,9 +613,10 @@ final class VaultService: ObservableObject {
 final class DirectoryWatcher {
     private var stream: FSEventStreamRef?
     private let url: URL
-    private let callback: () -> Void
+    /// Changed absolute paths (may be empty if the event payload couldn't be read).
+    private let callback: ([String]) -> Void
 
-    init(url: URL, callback: @escaping () -> Void) {
+    init(url: URL, callback: @escaping ([String]) -> Void) {
         self.url = url
         self.callback = callback
     }
@@ -383,10 +639,19 @@ final class DirectoryWatcher {
 
         stream = FSEventStreamCreate(
             kCFAllocatorDefault,
-            { _, info, _, _, _, _ in
+            { _, info, numEvents, eventPaths, _, _ in
                 guard let info else { return }
                 let watcher = Unmanaged<DirectoryWatcher>.fromOpaque(info).takeUnretainedValue()
-                watcher.callback()
+                // With UseCFTypes, eventPaths is a CFArray of CFString paths.
+                var changed: [String] = []
+                let cfPaths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
+                let count = min(Int(numEvents), CFArrayGetCount(cfPaths))
+                for i in 0..<count {
+                    guard let raw = CFArrayGetValueAtIndex(cfPaths, i) else { continue }
+                    let s = Unmanaged<CFString>.fromOpaque(raw).takeUnretainedValue() as String
+                    changed.append(s)
+                }
+                watcher.callback(changed)
             },
             &context,
             paths,

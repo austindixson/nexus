@@ -140,7 +140,24 @@ struct CommandPaletteView: View {
             CommandItem(id: "reindex", title: "Rebuild vault index", subtitle: nil, systemImage: "arrow.triangle.2.circlepath") {
                 app.vault.fullRescan()
             },
-        ]
+            CommandItem(id: "ask", title: "Ask Nexus…", subtitle: "AI / offline search", systemImage: "sparkles") {
+                app.focusAskNexus()
+            },
+            CommandItem(id: "import", title: "Import source…", subtitle: "PDF, web, text → Sources/", systemImage: "square.and.arrow.down") {
+                app.showImportSheet = true
+            },
+            CommandItem(id: "studio-summary", title: "Studio: summary note", subtitle: nil, systemImage: "doc.richtext") {
+                app.rightSidebarTab = .ask
+                app.showRightSidebar = true
+            },
+            CommandItem(id: "reload-plugins", title: "Reload plugins", subtitle: ".nexus/plugins", systemImage: "puzzlepiece.extension") {
+                Task { await app.reloadPlugins() }
+            },
+        ] + app.pluginHost.allCommands.map { cmd in
+            CommandItem(id: "plugin.\(cmd.id)", title: cmd.title, subtitle: "Plugin", systemImage: "puzzlepiece") {
+                cmd.action()
+            }
+        }
     }
 
     private var filtered: [CommandItem] {
@@ -221,7 +238,7 @@ struct QuickSwitcherView: View {
                 .prefix(30)
                 .map { SearchHit(id: $0.id, path: $0.id, title: $0.title, snippet: $0.folderPath, score: 1, line: nil) }
         }
-        return SearchService.search(query: query, notes: app.vault.notes, limit: 40)
+        return SearchService.search(query: query, notes: app.vault.notes, limit: 40, index: app.vault.indexStore)
     }
 
     private func openFirst() {

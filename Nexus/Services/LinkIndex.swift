@@ -11,6 +11,11 @@ final class LinkIndex: ObservableObject {
     @Published private(set) var lastBuilt = Date()
 
     private var notes: [String: NoteDocument] = [:]
+    /// Fingerprint of graph topology — skip lastBuilt bump when structure is unchanged.
+    private var lastTopologyKey: String = ""
+
+    /// Basename / path-without-ext / title → candidate paths (handles duplicate note names).
+    private var titleIndex: [String: [String]] = [:]
 
     func rebuild(from notes: [String: NoteDocument]) {
         self.notes = notes
@@ -21,10 +26,7 @@ final class LinkIndex: ObservableObject {
         var nodeIDs = Set<String>()
 
         let known = Set(notes.keys)
-        let titles: [String: String] = Dictionary(uniqueKeysWithValues: notes.map {
-            let t = ($0.key as NSString).deletingPathExtension
-            return (t.lowercased(), $0.key)
-        })
+        titleIndex = Self.buildTitleIndex(notes: notes)
 
         for (path, note) in notes {
             nodeIDs.insert(path)
@@ -34,7 +36,7 @@ final class LinkIndex: ObservableObject {
 
             for link in note.outgoingLinks {
                 let resolved = MarkdownParser.resolveLinkTarget(link.target, from: path, knownPaths: known)
-                    ?? titles[link.target.lowercased()]
+                    ?? resolveTitle(link.target, from: path)
 
                 let targetID: String
                 if let resolved {
@@ -133,8 +135,69 @@ final class LinkIndex: ObservableObject {
         self.backlinks = backlinks
         self.unresolved = unresolved
         self.tags = tags
-        self.graph = GraphSnapshot(nodes: graphNodes, edges: Array(edgeMap.values))
-        self.lastBuilt = Date()
+        let edges = Array(edgeMap.values)
+        self.graph = GraphSnapshot(nodes: graphNodes, edges: edges)
+
+        // Only notify graph view when topology actually changed (not every FSEvents noop).
+        let topo = Self.topologyKey(nodes: graphNodes, edges: edges)
+        if topo != lastTopologyKey {
+            lastTopologyKey = topo
+            self.lastBuilt = Date()
+        }
+    }
+
+    private static func topologyKey(nodes: [GraphNode], edges: [GraphEdge]) -> String {
+        let n = nodes.map(\.id).sorted().joined(separator: "\u{1e}")
+        let e = edges.map(\.id).sorted().joined(separator: "\u{1e}")
+        return n + "\u{1f}" + e
+    }
+
+    /// Resolve a wikilink target via title multimap (never crashes on duplicate basenames).
+    func resolveTitle(_ target: String, from sourcePath: String) -> String? {
+        let key = target.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !key.isEmpty else { return nil }
+        let candidates = titleIndex[key]
+            ?? titleIndex[(key as NSString).lastPathComponent]
+            ?? []
+        if candidates.isEmpty { return nil }
+        if candidates.count == 1 { return candidates[0] }
+
+        // Prefer same folder as source, then shortest path, then lexicographic (stable).
+        let sourceDir = (sourcePath as NSString).deletingLastPathComponent
+        if let sameFolder = candidates.first(where: {
+            ($0 as NSString).deletingLastPathComponent == sourceDir
+        }) {
+            return sameFolder
+        }
+        return candidates.sorted {
+            if $0.count != $1.count { return $0.count < $1.count }
+            return $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }.first
+    }
+
+    private static func buildTitleIndex(notes: [String: NoteDocument]) -> [String: [String]] {
+        var index: [String: [String]] = [:]
+        func add(_ key: String, path: String) {
+            let k = key.lowercased()
+            guard !k.isEmpty else { return }
+            var list = index[k] ?? []
+            if !list.contains(path) {
+                list.append(path)
+                index[k] = list
+            }
+        }
+        for (path, note) in notes {
+            let fullNoExt = (path as NSString).deletingPathExtension
+            let baseNoExt = ((path as NSString).lastPathComponent as NSString).deletingPathExtension
+            add(fullNoExt, path: path)
+            add(baseNoExt, path: path)
+            add(note.title, path: path)
+            // Also index nested path segments used in wikilinks like Projects/Ideas
+            if fullNoExt.contains("/") {
+                add(fullNoExt, path: path)
+            }
+        }
+        return index
     }
 
     func backlinks(for path: String) -> [Backlink] {
