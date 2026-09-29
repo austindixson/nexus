@@ -28,7 +28,12 @@ struct SettingsView: View {
 
     @State private var xaiKeyDraft = ""
     @State private var openAIKeyDraft = ""
+    @State private var anthropicKeyDraft = ""
+    @State private var remoteKeyDraft = ""
     @State private var keySavedMessage: String?
+    @State private var connectionMessage: String?
+    @State private var connectionOK: Bool?
+    @State private var connectionTesting = false
 
     private var selectedTab: Binding<SettingsPane> {
         Binding(
@@ -71,7 +76,7 @@ struct SettingsView: View {
                 .tabItem { Label("About", systemImage: "info.circle") }
                 .tag(SettingsPane.about)
         }
-        .frame(width: 580, height: 500)
+        .frame(width: 580, height: 560)
     }
 
     private var generalTab: some View {
@@ -149,43 +154,74 @@ struct SettingsView: View {
                 .pickerStyle(.menu)
                 .onChange(of: ai.providerKind) { _, kind in
                     ai.applyDefaultModelIfNeeded(for: kind)
+                    connectionMessage = nil
+                    connectionOK = nil
                 }
                 TextField("Model ID", text: $ai.modelID)
-                Text("Vault works fully offline with AI disabled. Keys are stored in Keychain only — never in vault files.")
+                Text("Vault works fully offline with AI disabled. Keys stay in Keychain — never in vault files. There is no Nexus account; cloud providers use their own API keys.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if ai.providerKind == .xai && !ai.hasXAIKey {
-                    Text("Add an API key below to enable SpaceXAI.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                if ai.providerKind == .openAICompatible && !ai.hasOpenAIKey {
-                    Text("Add an API key below to enable this provider.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
+                providerNeedsKeyHint
+            }
+
+            if ai.providerKind == .openai {
+                Section("OpenAI") {
+                    SecureField("OPENAI_API_KEY", text: $openAIKeyDraft)
+                    keyButtons(
+                        save: {
+                            ai.setOpenAIKey(openAIKeyDraft)
+                            openAIKeyDraft = ""
+                            keySavedMessage = ai.hasOpenAIKey ? "Key saved to Keychain." : "Key cleared."
+                        },
+                        clear: {
+                            ai.setOpenAIKey(nil)
+                            keySavedMessage = "Key cleared."
+                        },
+                        hasKey: ai.hasOpenAIKey
+                    )
+                    Text("https://api.openai.com/v1 · paste a key from the OpenAI dashboard.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                 }
             }
 
             if ai.providerKind == .xai {
                 Section("SpaceXAI (xAI)") {
                     SecureField("XAI_API_KEY", text: $xaiKeyDraft)
-                    HStack {
-                        Button("Save key") {
+                    keyButtons(
+                        save: {
                             ai.setXAIKey(xaiKeyDraft)
                             xaiKeyDraft = ""
                             keySavedMessage = ai.hasXAIKey ? "Key saved to Keychain." : "Key cleared."
-                        }
-                        Button("Clear key") {
+                        },
+                        clear: {
                             ai.setXAIKey(nil)
                             keySavedMessage = "Key cleared."
-                        }
-                        if ai.hasXAIKey {
-                            Text("Key present")
-                                .font(.caption)
-                                .foregroundStyle(.green)
-                        }
-                    }
+                        },
+                        hasKey: ai.hasXAIKey
+                    )
                     Text("Default model: grok-4.5 · https://api.x.ai/v1")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            if ai.providerKind == .anthropic {
+                Section("Anthropic (Claude)") {
+                    SecureField("ANTHROPIC_API_KEY", text: $anthropicKeyDraft)
+                    keyButtons(
+                        save: {
+                            ai.setAnthropicKey(anthropicKeyDraft)
+                            anthropicKeyDraft = ""
+                            keySavedMessage = ai.hasAnthropicKey ? "Key saved to Keychain." : "Key cleared."
+                        },
+                        clear: {
+                            ai.setAnthropicKey(nil)
+                            keySavedMessage = "Key cleared."
+                        },
+                        hasKey: ai.hasAnthropicKey
+                    )
+                    Text("Default model: claude-sonnet-4-5 · https://api.anthropic.com")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -194,25 +230,66 @@ struct SettingsView: View {
             if ai.providerKind == .ollama {
                 Section("Ollama") {
                     TextField("Base URL", text: $ai.ollamaBaseURL)
-                    Text("Run models locally (e.g. ollama run llama3.2). No API key required.")
+                    Text("Localhost or a Tailscale MagicDNS / Funnel URL (e.g. http://100.x.x.x:11434 or https://ollama.tailnet.ts.net). No API key required.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            if ai.providerKind == .openAICompatible {
-                Section("OpenAI-compatible") {
-                    TextField("Base URL", text: $ai.openAIBaseURL)
-                    SecureField("API key", text: $openAIKeyDraft)
-                    HStack {
-                        Button("Save key") {
-                            ai.setOpenAIKey(openAIKeyDraft)
-                            openAIKeyDraft = ""
-                            keySavedMessage = ai.hasOpenAIKey ? "Key saved." : "Key cleared."
-                        }
-                        Button("Clear key") {
-                            ai.setOpenAIKey(nil)
+            if ai.providerKind == .remoteOpenAI {
+                Section("Remote OpenAI-compatible") {
+                    TextField("Base URL", text: $ai.remoteOpenAIBaseURL)
+                    SecureField("API key", text: $remoteKeyDraft)
+                    keyButtons(
+                        save: {
+                            ai.setRemoteOpenAIKey(remoteKeyDraft)
+                            remoteKeyDraft = ""
+                            keySavedMessage = ai.hasRemoteOpenAIKey ? "Key saved to Keychain." : "Key cleared."
+                        },
+                        clear: {
+                            ai.setRemoteOpenAIKey(nil)
                             keySavedMessage = "Key cleared."
+                        },
+                        hasKey: ai.hasRemoteOpenAIKey
+                    )
+                    Text("OpenRouter, LiteLLM, self-hosted gateways, or Tailscale-exposed OpenAI-compatible servers. Base URL must include the /v1 path when required by the host.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if ai.providerKind != .disabled {
+                Section("Connection") {
+                    HStack {
+                        Button {
+                            connectionTesting = true
+                            connectionMessage = nil
+                            connectionOK = nil
+                            Task {
+                                let result = await ai.testConnection()
+                                connectionTesting = false
+                                switch result {
+                                case .ok(let msg):
+                                    connectionOK = true
+                                    connectionMessage = msg
+                                case .failure(let msg):
+                                    connectionOK = false
+                                    connectionMessage = msg
+                                }
+                            }
+                        } label: {
+                            if connectionTesting {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Text("Test connection")
+                            }
+                        }
+                        .disabled(connectionTesting)
+                        if let connectionMessage {
+                            Text(connectionMessage)
+                                .font(.caption)
+                                .foregroundStyle(connectionOK == true ? Color.green : (connectionOK == false ? Color.orange : .secondary))
+                                .lineLimit(3)
                         }
                     }
                 }
@@ -237,6 +314,42 @@ struct SettingsView: View {
             }
         }
         .padding()
+    }
+
+    @ViewBuilder
+    private var providerNeedsKeyHint: some View {
+        switch ai.providerKind {
+        case .openai where !ai.hasOpenAIKey:
+            Text("Add an API key below to enable OpenAI.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        case .xai where !ai.hasXAIKey:
+            Text("Add an API key below to enable SpaceXAI.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        case .anthropic where !ai.hasAnthropicKey:
+            Text("Add an API key below to enable Anthropic.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        case .remoteOpenAI where !ai.hasRemoteOpenAIKey:
+            Text("Add an API key below to enable this remote endpoint.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        default:
+            EmptyView()
+        }
+    }
+
+    private func keyButtons(save: @escaping () -> Void, clear: @escaping () -> Void, hasKey: Bool) -> some View {
+        HStack {
+            Button("Save key", action: save)
+            Button("Clear key", action: clear)
+            if hasKey {
+                Text("Key present")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+        }
     }
 
     private var pluginsTab: some View {

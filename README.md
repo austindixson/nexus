@@ -169,6 +169,13 @@ Web-shell apps (Electron / Tauri) give you a native *window*. Nexus is a native 
 - Plugin API hooks (Swift) for commands & post-processors  
 - **Workspace persistence** (`.nexus/workspace.json` per vault)  
 
+### Ask Nexus (optional AI)
+
+- Opt-in providers: **OpenAI**, **xAI / Grok**, **Anthropic (Claude)**, **Ollama**, **Remote OpenAI-compatible**  
+- API keys in Keychain only — no Nexus cloud accounts  
+- **Remote / Tailscale**: point Ollama or a Remote OpenAI-compatible base URL at `http://100.x.x.x:…`, MagicDNS, or Funnel HTTPS — use **Test connection** in Settings → AI  
+- Offline Ask still returns ranked vault hits when AI is disabled  
+
 ---
 
 ## Architecture
@@ -341,6 +348,7 @@ macOS **AppIcon** images live in
 - [x] KaTeX + GFM tables + callouts in preview  
 - [x] Workspace layout persistence  
 - [x] Brand identity + GitHub landing visuals  
+- [x] Cloud / remote LLM presets (OpenAI, Anthropic, Tailscale-friendly URLs)  
 - [ ] Hotkey customizer UI  
 - [ ] Metal edge thickness + large-vault stress / instancing  
 - [ ] `.nexusplugin` bundle loading from vault  
