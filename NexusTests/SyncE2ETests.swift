@@ -6,9 +6,12 @@ import XCTest
 /// The vault-filesystem half uses real temp vaults and the process's real git
 /// binary; the git *remote* is a local bare repo under the sandbox. Network
 /// credentials are never contacted by these tests.
+@MainActor
 final class SyncE2ETests: XCTestCase {
     private var vault: URL!
     private var remote: URL!
+
+    private var syncService: GitSyncService!
 
     override func setUpWithError() throws {
         vault = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -17,9 +20,19 @@ final class SyncE2ETests: XCTestCase {
             .appendingPathComponent("nexus-sync-remote-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
         try "seed".write(to: vault.appendingPathComponent("Welcome.md"), atomically: true, encoding: .utf8)
+        // A dedicated instance per test: the engine is a long-lived singleton,
+        // and a cycle from the previous test must never touch this test's vault.
+        syncService = GitSyncService.forTesting()
     }
 
-    override func tearDownWithError() throws {
+    override func tearDown() async throws {
+        // Let this test's own cycles finish before tearing the instance down.
+        await syncService.waitForSettledForTesting(timeout: 30)
+        syncService.detach()
+        syncService.resetPersistedSettingsForTesting()
+        syncService = nil
+        GitSyncService.shared.detach()
+        GitSyncService.shared.resetPersistedSettingsForTesting()
         try? FileManager.default.removeItem(at: vault)
         try? FileManager.default.removeItem(at: remote)
     }
@@ -102,16 +115,12 @@ final class SyncE2ETests: XCTestCase {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else {
             throw XCTSkip("git CLI not installed on this runner")
         }
-        // Initialize the bare remote.
-        let initProc = Process()
-        initProc.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        initProc.arguments = ["init", "--bare", "-b", "main", remote.path]
-        initProc.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin"]
-        try initProc.run()
-        initProc.waitUntilExit()
-        XCTAssertEqual(initProc.terminationStatus, 0)
+        // The remote is a bare repo created up front (production reality); a
+        // plain empty directory is not a valid git remote and must be rejected
+        // by enableSync's preconditions instead.
+        let r = try makeBareRemote()
 
-        let sync = GitSyncService.shared
+        let sync = syncService!
         sync.resetPersistedSettingsForTesting()
         sync.vaultServiceForObservation = nil // no vault observer for this test
         sync.attach(vaultRoot: vault)
@@ -123,19 +132,14 @@ final class SyncE2ETests: XCTestCase {
         settings.keychainAccount = "" // no credentials in tests
         sync.saveSettings(settings)
 
-        sync.enableSync(remoteRaw: remote.path)
+        sync.enableSync(remoteRaw: r.path)
+        await sync.waitForEnableTaskForTesting()
 
-        // enableSync spawns a Task; wait for it to settle.
-        var settled = false
-        for _ in 0..<100 {
-            try await Task.sleep(nanoseconds: 100_000_000)
-            if !sync.status.isBusy { settled = true; break }
-        }
-        XCTAssertTrue(settled, "enableSync never settled")
+        XCTAssertFalse(sync.status.isBusy, "enableSync never settled")
         XCTAssertNil(sync.status.lastError, "unexpected error: \(sync.status.lastError ?? "none")")
         XCTAssertEqual(sync.status.phase, .idle)
         XCTAssertTrue(sync.settings.enabled)
-        XCTAssertEqual(sync.settings.remote, remote.path)
+        XCTAssertEqual(sync.settings.remote, r.path)
 
         // The vault became a git repo with a safety .gitignore.
         let fm = FileManager.default
@@ -144,8 +148,24 @@ final class SyncE2ETests: XCTestCase {
         XCTAssertTrue(gitignore.contains(".nexus/"))
 
         // The remote received the seed commit.
-        let heads = runGitSync(["ls-remote", "--heads", remote.path], at: vault)
+        let heads = runGitSync(["ls-remote", "--heads", r.path], at: vault)
         XCTAssertTrue(heads.stdout.contains("refs/heads/main"))
+
+        // A plain directory is not a git remote: enableSync must refuse it and
+        // must never git-init the user's folder.
+        let notARemote = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nexus-sync-notarepo-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: notARemote, withIntermediateDirectories: true)
+        sync.resetPersistedSettingsForTesting()
+        sync.attach(vaultRoot: vault)
+        sync.enableSync(remoteRaw: notARemote.path)
+        await sync.waitForEnableTaskForTesting()
+        XCTAssertNotNil(sync.status.lastError, "a plain directory must be rejected as a remote")
+        XCTAssertFalse(sync.settings.enabled)
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: notARemote.appendingPathComponent("objects").path),
+            "Nexus must never git-init the remote path itself")
+        try? FileManager.default.removeItem(at: notARemote)
     }
 
     @MainActor
@@ -153,54 +173,52 @@ final class SyncE2ETests: XCTestCase {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else {
             throw XCTSkip("git CLI not installed on this runner")
         }
-        // Enable sync first (reuse the first-sync flow).
-        let initProc = Process()
-        initProc.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        initProc.arguments = ["init", "--bare", "-b", "main", remote.path]
-        initProc.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin"]
-        try initProc.run(); initProc.waitUntilExit()
+        let r = try makeBareRemote()
 
-        let sync = GitSyncService.shared
+        let sync = syncService!
         sync.resetPersistedSettingsForTesting()
         var settings = sync.settings
         settings.branch = "main"
         settings.authorName = "Sync Tests"
         settings.authorEmail = "tests@example.invalid"
-        settings.debounceSeconds = SyncSettings.debounceRange.lowerBound // 30s — we trigger manually
+        settings.debounceSeconds = SyncSettings.debounceRange.lowerBound // we trigger manually
         settings.keychainAccount = ""
         sync.saveSettings(settings)
         sync.attach(vaultRoot: vault)
-        sync.enableSync(remoteRaw: remote.path)
-        for _ in 0..<100 {
-            try await Task.sleep(nanoseconds: 100_000_000)
-            if !sync.status.isBusy { break }
-        }
-
-        // Deterministic branch: enableSync's ls-remote pre-flight resolves the branch
-        // in a background Task; pin HEAD onto the configured branch so the assertion
-        // below does not race that Task.
-        let headRes = runGitSync(["symbolic-ref", "HEAD", "refs/heads/main"], at: vault)
-        XCTAssertEqual(headRes.code, 0, "could not pin vault HEAD to main")
+        sync.enableSync(remoteRaw: r.path)
+        await sync.waitForEnableTaskForTesting()
+        await sync.waitForSettledForTesting()
 
         // Simulate a vault mutation and force a cycle.
         try "changed".write(to: vault.appendingPathComponent("Welcome.md"), atomically: true, encoding: .utf8)
         sync.noteDidChange(path: "Welcome.md")
         await sync.syncNow()
+        await sync.waitForSettledForTesting()
+        // The mutation must reach the remote; poll instead of sleeping so slow
+        // CI never sees a false failure (the push lands after syncNow returns).
+        let remoteTree: GitOut = {
+            var last = runGitSync(["show", "main:Welcome.md"], at: r)
+            let deadline = Date().addingTimeInterval(30)
+            while last.code != 0 && Date() < deadline {
+                Thread.sleep(forTimeInterval: 1)
+                last = runGitSync(["show", "main:Welcome.md"], at: r)
+            }
+            return last
+        }()
 
         let err = sync.status.lastError ?? ""
         XCTAssert(err.isEmpty || !err.contains("Please tell me who you are"),
                   "commit must not fail on missing identity: \(err)")
         // The mutation must reach the remote as a tree change. Assert on the
         // remote tree contents (robust), not on our internal commit-message prefix.
-        let remoteTree = runGitSync(["show", "main:Welcome.md"], at: remote)
-        XCTAssertEqual(remoteTree.code, 0, "no Welcome.md on remote main")
+        XCTAssertEqual(remoteTree.code, 0, "no Welcome.md on remote main: \(remoteTree.stderr.prefix(160))")
         XCTAssertTrue(remoteTree.stdout.contains("changed"),
                       "expected mutation to reach the remote; got: \(remoteTree.stdout.prefix(120))")
     }
 
     @MainActor
     func testWorkspaceSidecarExcludedAndUnmergedPathsDetected() throws {
-        let sync = GitSyncService.shared
+        let sync = syncService!
         sync.resetPersistedSettingsForTesting()
         sync.attach(vaultRoot: vault)
         // Write a conflict copy; conflictCopyPaths must find it but never treat
@@ -229,7 +247,7 @@ final class SyncE2ETests: XCTestCase {
 
         let remote = try makeBareRemote()
 
-        let sync = GitSyncService.shared
+        let sync = syncService!
         sync.resetPersistedSettingsForTesting()
         var settings = sync.settings
         settings.branch = "main"
@@ -239,10 +257,9 @@ final class SyncE2ETests: XCTestCase {
         sync.saveSettings(settings)
         sync.attach(vaultRoot: vault)
         sync.enableSync(remoteRaw: remote.path)
-        for _ in 0..<200 {
-            try await Task.sleep(nanoseconds: 100_000_000)
-            if !sync.status.isBusy { break }
-        }
+        await sync.waitForEnableTaskForTesting()
+
+        await sync.waitForSettledForTesting()
 
         // Sidecars must never be tracked. After enable, .gitignore exists and
         // `git add -A` (what every cycle runs) must leave the sidecars out.
@@ -261,14 +278,13 @@ final class SyncE2ETests: XCTestCase {
                        "sidecar tracked by git: \(tracked.stdout)")
     }
 
-    @MainActor
     func testPullBlockedKeepsPendingAndLocalCommit() async throws {
         guard FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else {
             throw XCTSkip("git CLI not installed on this runner")
         }
         let remote = try makeBareRemote()
 
-        let sync = GitSyncService.shared
+        let sync = syncService!
         sync.resetPersistedSettingsForTesting()
         var settings = sync.settings
         settings.branch = "main"
@@ -278,16 +294,18 @@ final class SyncE2ETests: XCTestCase {
         sync.saveSettings(settings)
         sync.attach(vaultRoot: vault)
         sync.enableSync(remoteRaw: remote.path)
-        for _ in 0..<200 {
-            try await Task.sleep(nanoseconds: 100_000_000)
-            if !sync.status.isBusy { break }
-        }
+        await sync.waitForEnableTaskForTesting()
+        await sync.waitForSettledForTesting()
+        XCTAssertEqual(sync.status.phase, .idle,
+                       "enable must settle before mutation test: \(sync.status.lastError ?? "nil")")
 
         // A user edits a file behind Nexus' back *during* the enable window.
         // Nexus must commit it, and if a later pull would be blocked, the local
         // commit must survive and the remote must still receive history.
         try "# user edit\n".write(to: vault.appendingPathComponent("User.md"), atomically: true, encoding: .utf8)
+        sync.noteDidChange(path: "User.md")
         await sync.syncNow()
+        await sync.waitForSettledForTesting()
 
         let log = runGitSync(["log", "--oneline", "--all"], at: vault)
         XCTAssertTrue(log.stdout.contains("nexus: sync"), "user edit must be committed: \(log.stdout)")
@@ -296,12 +314,12 @@ final class SyncE2ETests: XCTestCase {
                       "history must reach the remote: \(remoteLog.stdout)")
         // The committed user file must be present in the pushed tree.
         let tree = runGitSync(["show", "main:User.md"], at: remote)
-        XCTAssertEqual(tree.code, 0, "User.md missing from remote tree")
+        XCTAssertEqual(tree.code, 0, "User.md missing from remote tree: \(tree.stderr.prefix(200))")
     }
 
     @MainActor
     func testInvalidRemoteDoesNotHalfEnable() async throws {
-        let sync = GitSyncService.shared
+        let sync = syncService!
         sync.resetPersistedSettingsForTesting()
         var settings = sync.settings
         settings.keychainAccount = ""
@@ -310,10 +328,9 @@ final class SyncE2ETests: XCTestCase {
         sync.attach(vaultRoot: vault)
 
         sync.enableSync(remoteRaw: "ext::sh -c 'id'")
-        for _ in 0..<50 {
-            try await Task.sleep(nanoseconds: 50_000_000)
-            if !sync.status.isBusy { break }
-        }
+        await sync.waitForEnableTaskForTesting()
+
+        await sync.waitForSettledForTesting()
         XCTAssertFalse(sync.settings.enabled, "invalid remote must never flip enabled")
         XCTAssertEqual(sync.status.phase, .error)
         XCTAssertNotNil(sync.status.lastError)
@@ -332,21 +349,74 @@ final class SyncE2ETests: XCTestCase {
         return dir
     }
 
+    func testEnableAgainstRemoteWithExistingHistory() async throws {
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/git") else { throw XCTSkip("no git") }
+        let r = try makeBareRemote()
+        // Seed the remote with an unrelated history, as another machine would.
+        let seed = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nexus-seed-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: seed, withIntermediateDirectories: true)
+        try "remote".write(to: seed.appendingPathComponent("Remote.md"), atomically: true, encoding: .utf8)
+        for args in [["init", "-b", "main"], ["config", "user.email", "s@e.invalid"], ["config", "user.name", "Seed"], ["add", "-A"], ["commit", "-m", "remote seed"], ["push", r.path, "main"]] {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/git"); p.arguments = args
+            p.currentDirectoryURL = seed
+            p.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1"]
+            let pipe = Pipe(); p.standardError = pipe
+            try p.run(); p.waitUntilExit()
+            if p.terminationStatus != 0 {
+                let d = pipe.fileHandleForReading.readDataToEndOfFile()
+                XCTFail("seed step \(args) failed: \(String(data: d, encoding: .utf8) ?? "?")")
+                return
+            }
+        }
+        try? FileManager.default.removeItem(at: seed)
+
+        let sync = syncService!
+        sync.resetPersistedSettingsForTesting()
+        sync.vaultServiceForObservation = nil
+        sync.attach(vaultRoot: vault)
+        var settings = sync.settings
+        settings.branch = "main"
+        settings.authorName = "Sync Tests"
+        settings.authorEmail = "tests@example.invalid"
+        settings.keychainAccount = ""
+        sync.saveSettings(settings)
+
+        sync.enableSync(remoteRaw: r.path)
+        await sync.waitForEnableTaskForTesting()
+        await sync.waitForSettledForTesting()
+
+        XCTAssertNil(sync.status.lastError, "unexpected error: \(sync.status.lastError ?? "")")
+        XCTAssertEqual(sync.status.phase, .idle)
+        XCTAssertTrue(sync.settings.enabled)
+        // Remote history must land in the vault, and local seed must reach remote.
+        let remoteFile = runGitSync(["show", "main:Remote.md"], at: vault)
+        XCTAssertEqual(remoteFile.code, 0, "Remote.md missing after integrate: \(remoteFile.stderr.prefix(200))")
+        let localOnRemote = runGitSync(["show", "main:Welcome.md"], at: r)
+        XCTAssertEqual(localOnRemote.code, 0, "Welcome.md missing from remote: \(localOnRemote.stderr.prefix(200))")
+    }
+
     // MARK: - Process helpers
 
-    @discardableResult
-    private func runGitSync(_ args: [String], at cwd: URL) -> (stdout: String, code: Int32) {
+    private struct GitOut { let stdout: String; let stderr: String; let code: Int32 }
+    private func runGitSync(_ args: [String], at cwd: URL) -> GitOut {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         p.arguments = args
         p.currentDirectoryURL = cwd
         let out = Pipe()
+        let err = Pipe()
         p.standardOutput = out
-        p.standardError = Pipe()
+        p.standardError = err
         p.environment = ["HOME": NSHomeDirectory(), "PATH": "/usr/bin:/bin", "GIT_CONFIG_NOSYSTEM": "1"]
         try? p.run()
-        p.waitUntilExit()
         let data = out.fileHandleForReading.readDataToEndOfFile()
-        return (String(data: data, encoding: .utf8) ?? "", p.terminationStatus)
+        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return GitOut(stdout: String(data: data, encoding: .utf8) ?? "",
+                      stderr: String(data: errData, encoding: .utf8) ?? "",
+                      code: p.terminationStatus)
     }
+
+
 }

@@ -100,6 +100,7 @@
 		D51B6BB97083B1B6FF580891 /* GraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A1A7E6DEC38D26C0DE1F1C6 /* GraphView.swift */; };
 		D790A55592224E24EB7C1C8C /* CanvasView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3C3211D224800DC1A507F5D /* CanvasView.swift */; };
 		DA01F0E3F5A9B7F4567604EB /* KaTeX_SansSerif-Italic.woff in Resources */ = {isa = PBXBuildFile; fileRef = C0AFE8CA65C39BD394A12A46 /* KaTeX_SansSerif-Italic.woff */; };
+		DC164B6E74A62B66F0850A0C /* SyncTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B06C45A1525EE547CBBB205 /* SyncTrace.swift */; };
 		E04DBE54704D41796F2A2D39 /* KaTeX_Main-Italic.woff in Resources */ = {isa = PBXBuildFile; fileRef = F0BF19B4D484A79E38639E14 /* KaTeX_Main-Italic.woff */; };
 		E053442FAA1E1F385F3D6CEA /* KaTeX_Script-Regular.woff in Resources */ = {isa = PBXBuildFile; fileRef = E56F62E1301A69509ECF63B5 /* KaTeX_Script-Regular.woff */; };
 		E446D1398AD55589933DB4B3 /* KaTeX_Main-Regular.woff2 in Resources */ = {isa = PBXBuildFile; fileRef = AAC5180AB1A5C4E22242F054 /* KaTeX_Main-Regular.woff2 */; };
@@ -139,6 +140,7 @@
 		1DAB0AE35FD9329B56E883C6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		1E70771E9FB8E8960E2B4F6D /* KaTeX_Main-BoldItalic.woff2 */ = {isa = PBXFileReference; path = "KaTeX_Main-BoldItalic.woff2"; sourceTree = "<group>"; };
 		23524E0E027AEEAEE2BDFB48 /* SyncSidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSidebarView.swift; sourceTree = "<group>"; };
+		2B06C45A1525EE547CBBB205 /* SyncTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncTrace.swift; sourceTree = "<group>"; };
 		2D6E55E9EC9019373C520F68 /* KaTeX_SansSerif-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = "KaTeX_SansSerif-Bold.ttf"; sourceTree = "<group>"; };
 		2F147C09D6EE28E224B0A27C /* MemoryStressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryStressTests.swift; sourceTree = "<group>"; };
 		35366C55F6E1BF5272E5E553 /* KaTeX_Caligraphic-Regular.woff */ = {isa = PBXFileReference; path = "KaTeX_Caligraphic-Regular.woff"; sourceTree = "<group>"; };
@@ -462,6 +464,7 @@
 				9908A220F94AA4AD7228B798 /* GitRemote.swift */,
 				97902CAD24F6003AA55FD1F6 /* GitSyncService.swift */,
 				E15CD881EBC3BE79CE40A13B /* SyncSmoke.swift */,
+				2B06C45A1525EE547CBBB205 /* SyncTrace.swift */,
 			);
 			path = Sync;
 			sourceTree = "<group>";
@@ -736,6 +739,7 @@
 				D1B43CC2B1BC6F06C8B0897D /* SyncSettingsView.swift in Sources */,
 				0F898AC5EBD673CEC29D4691 /* SyncSidebarView.swift in Sources */,
 				13C079BFB6B2A2843586AE4E /* SyncSmoke.swift in Sources */,
+				DC164B6E74A62B66F0850A0C /* SyncTrace.swift in Sources */,
 				80B6C76459F5944ECDFAD0A9 /* VaultIndexStore.swift in Sources */,
 				4813659D8CA08A571EBEA9BA /* VaultService.swift in Sources */,
 				CF6296D79E669A235329B746 /* WorkspaceService.swift in Sources */,
