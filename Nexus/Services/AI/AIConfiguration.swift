@@ -7,7 +7,7 @@ import Security
 final class AIConfiguration: ObservableObject {
     static let shared = AIConfiguration()
 
-    enum ProviderKind: String, CaseIterable, Identifiable {
+    enum ProviderKind: String, CaseIterable, Identifiable, Hashable {
         case disabled
         case xai
         case ollama
@@ -21,6 +21,14 @@ final class AIConfiguration: ObservableObject {
             case .xai: return "SpaceXAI (xAI)"
             case .ollama: return "Ollama (local)"
             case .openAICompatible: return "OpenAI-compatible"
+            }
+        }
+
+        /// Cloud providers need a Keychain (or env) API key before Ask is live.
+        var requiresAPIKey: Bool {
+            switch self {
+            case .disabled, .ollama: return false
+            case .xai, .openAICompatible: return true
             }
         }
     }
@@ -167,6 +175,20 @@ final class AIConfiguration: ObservableObject {
                 apiKey: key,
                 defaultModel: modelID.isEmpty ? "gpt-4o-mini" : modelID
             )
+        }
+    }
+
+    /// Seeds a sensible default model when switching providers (only if empty / previous default).
+    func applyDefaultModelIfNeeded(for kind: ProviderKind) {
+        let defaults: [ProviderKind: String] = [
+            .xai: "grok-4.5",
+            .ollama: "llama3.2",
+            .openAICompatible: "gpt-4o-mini",
+        ]
+        guard let next = defaults[kind] else { return }
+        let previousDefaults = Set(defaults.values)
+        if modelID.isEmpty || previousDefaults.contains(modelID) {
+            modelID = next
         }
     }
 }

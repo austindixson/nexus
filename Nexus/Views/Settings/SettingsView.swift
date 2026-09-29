@@ -1,39 +1,75 @@
 import SwiftUI
 import AppKit
 
+enum SettingsPane: String, CaseIterable, Identifiable {
+    case general
+    case editor
+    case graph
+    case ai
+    case sync
+    case hotkeys
+    case plugins
+    case about
+
+    var id: String { rawValue }
+
+    static let preferredTabKey = "nexus.settings.preferredTab"
+
+    static func prefer(_ pane: SettingsPane) {
+        UserDefaults.standard.set(pane.rawValue, forKey: preferredTabKey)
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var app: AppState
     @ObservedObject private var ai = AIConfiguration.shared
+
+    @AppStorage(SettingsPane.preferredTabKey) private var preferredTabRaw = SettingsPane.general.rawValue
 
     @State private var xaiKeyDraft = ""
     @State private var openAIKeyDraft = ""
     @State private var keySavedMessage: String?
 
+    private var selectedTab: Binding<SettingsPane> {
+        Binding(
+            get: { SettingsPane(rawValue: preferredTabRaw) ?? .general },
+            set: { preferredTabRaw = $0.rawValue }
+        )
+    }
+
     var body: some View {
-        TabView {
+        TabView(selection: selectedTab) {
             generalTab
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(SettingsPane.general)
 
             editorTab
                 .tabItem { Label("Editor", systemImage: "doc.richtext") }
+                .tag(SettingsPane.editor)
 
             graphTab
                 .tabItem { Label("Graph", systemImage: "point.3.connected.trianglepath.dotted") }
+                .tag(SettingsPane.graph)
 
             aiTab
                 .tabItem { Label("AI", systemImage: "sparkles") }
+                .tag(SettingsPane.ai)
 
             syncTab
                 .tabItem { Label("Sync", systemImage: "arrow.triangle.2.circlepath") }
+                .tag(SettingsPane.sync)
 
             HotkeysSettingsView()
                 .tabItem { Label("Hotkeys", systemImage: "keyboard") }
+                .tag(SettingsPane.hotkeys)
 
             pluginsTab
                 .tabItem { Label("Plugins", systemImage: "puzzlepiece.extension") }
+                .tag(SettingsPane.plugins)
 
             aboutTab
                 .tabItem { Label("About", systemImage: "info.circle") }
+                .tag(SettingsPane.about)
         }
         .frame(width: 580, height: 500)
     }
@@ -110,10 +146,24 @@ struct SettingsView: View {
                         Text(kind.title).tag(kind)
                     }
                 }
+                .pickerStyle(.menu)
+                .onChange(of: ai.providerKind) { _, kind in
+                    ai.applyDefaultModelIfNeeded(for: kind)
+                }
                 TextField("Model ID", text: $ai.modelID)
                 Text("Vault works fully offline with AI disabled. Keys are stored in Keychain only — never in vault files.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if ai.providerKind == .xai && !ai.hasXAIKey {
+                    Text("Add an API key below to enable SpaceXAI.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if ai.providerKind == .openAICompatible && !ai.hasOpenAIKey {
+                    Text("Add an API key below to enable this provider.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
             }
 
             if ai.providerKind == .xai {
