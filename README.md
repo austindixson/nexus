@@ -171,9 +171,11 @@ Web-shell apps (Electron / Tauri) give you a native *window*. Nexus is a native 
 
 ### Ask Nexus (optional AI)
 
-- Opt-in providers: **OpenAI**, **xAI / Grok**, **Anthropic (Claude)**, **Ollama**, **Remote OpenAI-compatible**  
+- Opt-in providers: **OpenAI**, **xAI / Grok**, **Anthropic (Claude)**, **DeepSeek**, **Ollama**, **Remote OpenAI-compatible**  
 - API keys in Keychain only — no Nexus cloud accounts  
+- **Local credentials**: reuse Claude Code / Codex CLI OAuth when no Keychain key is set; optional project `.env` (default `~/Desktop/CLM/.env`) for `DEEPSEEK_API_KEY` and similar — secrets are read at request time, not copied into Nexus  
 - **Remote / Tailscale**: point Ollama or a Remote OpenAI-compatible base URL at `http://100.x.x.x:…`, MagicDNS, or Funnel HTTPS — use **Test connection** in Settings → AI  
+- Cursor IDE login is not supported (no public inference API)  
 - Offline Ask still returns ranked vault hits when AI is disabled  
 
 ---

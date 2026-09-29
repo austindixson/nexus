@@ -60,7 +60,7 @@ enum AIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .disabled: return "AI is disabled. Enable a provider in Settings."
-        case .missingAPIKey: return "Missing API key. Add one in Settings → AI (stored in Keychain)."
+        case .missingAPIKey: return "Missing credentials. Add a key in Settings → AI, or enable local CLI / project .env credentials."
         case .badURL: return "Invalid API base URL. Use http(s)://host[:port]/path]."
         case .unreachable(let detail): return "Could not reach model endpoint: \(detail)"
         case .httpStatus(let code, let body): return "API error \(code): \(body.prefix(240))"
@@ -199,11 +199,37 @@ struct OpenAICompatibleProvider: AIProvider {
 // MARK: - Anthropic Messages API
 
 struct AnthropicProvider: AIProvider {
+    enum AuthMode: Sendable {
+        case apiKey(String)
+        case claudeCodeOAuth(String)
+    }
+
     let baseURL: URL
-    let apiKey: String
+    let auth: AuthMode
     let defaultModel: String
 
-    var displayName: String { "Anthropic" }
+    /// Convenience for console API keys.
+    init(baseURL: URL, apiKey: String, defaultModel: String) {
+        self.baseURL = baseURL
+        self.auth = .apiKey(apiKey)
+        self.defaultModel = defaultModel
+    }
+
+    init(baseURL: URL, auth: AuthMode, defaultModel: String) {
+        self.baseURL = baseURL
+        self.auth = auth
+        self.defaultModel = defaultModel
+    }
+
+    var displayName: String {
+        switch auth {
+        case .apiKey: return "Anthropic"
+        case .claudeCodeOAuth: return "Claude Code"
+        }
+    }
+
+    private static let claudeCodeSystemPreamble =
+        "You are Claude Code, Anthropic's official CLI for Claude."
 
     func complete(_ request: AIChatRequest) async throws -> String {
         var collected = ""
@@ -234,6 +260,19 @@ struct AnthropicProvider: AIProvider {
         }
     }
 
+    private func applyAuth(to req: inout URLRequest) {
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        switch auth {
+        case .apiKey(let key):
+            req.setValue(key, forHTTPHeaderField: "x-api-key")
+        case .claudeCodeOAuth(let token):
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            req.setValue("claude-code-20250219,oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+            req.setValue("cli", forHTTPHeaderField: "x-app")
+            req.setValue("claude-cli/1.0 (Nexus)", forHTTPHeaderField: "User-Agent")
+        }
+    }
+
     /// Returns true if any streamed text was yielded.
     private func completeStream(
         _ request: AIChatRequest,
@@ -243,11 +282,13 @@ struct AnthropicProvider: AIProvider {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        applyAuth(to: &req)
         req.timeoutInterval = 120
 
-        let (system, messages) = Self.splitSystem(request.messages)
+        let (system, messages) = Self.splitSystem(request.messages, oauth: {
+            if case .claudeCodeOAuth = auth { return true }
+            return false
+        }())
         var payload: [String: Any] = [
             "model": request.model ?? defaultModel,
             "max_tokens": request.maxTokens ?? 2048,
@@ -255,7 +296,7 @@ struct AnthropicProvider: AIProvider {
             "stream": true,
             "messages": messages,
         ]
-        if let system, !system.isEmpty {
+        if let system {
             payload["system"] = system
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -298,11 +339,13 @@ struct AnthropicProvider: AIProvider {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
-        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        applyAuth(to: &req)
         req.timeoutInterval = 120
 
-        let (system, messages) = Self.splitSystem(request.messages)
+        let (system, messages) = Self.splitSystem(request.messages, oauth: {
+            if case .claudeCodeOAuth = auth { return true }
+            return false
+        }())
         var payload: [String: Any] = [
             "model": request.model ?? defaultModel,
             "max_tokens": request.maxTokens ?? 2048,
@@ -310,7 +353,7 @@ struct AnthropicProvider: AIProvider {
             "stream": false,
             "messages": messages,
         ]
-        if let system, !system.isEmpty {
+        if let system {
             payload["system"] = system
         }
         req.httpBody = try JSONSerialization.data(withJSONObject: payload)
@@ -334,7 +377,7 @@ struct AnthropicProvider: AIProvider {
         return trimmed
     }
 
-    private static func splitSystem(_ messages: [AIMessage]) -> (String?, [[String: String]]) {
+    private static func splitSystem(_ messages: [AIMessage], oauth: Bool) -> (Any?, [[String: String]]) {
         var systemParts: [String] = []
         var rest: [[String: String]] = []
         for m in messages {
@@ -347,8 +390,188 @@ struct AnthropicProvider: AIProvider {
                 rest.append(["role": "assistant", "content": m.content])
             }
         }
+        if oauth {
+            // Claude Code OAuth requires the first system block to be the CLI identity string.
+            var blocks: [[String: String]] = [
+                ["type": "text", "text": claudeCodeSystemPreamble]
+            ]
+            let extra = systemParts.joined(separator: "\n\n")
+            if !extra.isEmpty {
+                blocks.append(["type": "text", "text": extra])
+            }
+            return (blocks, rest)
+        }
         let system = systemParts.isEmpty ? nil : systemParts.joined(separator: "\n\n")
         return (system, rest)
+    }
+}
+
+// MARK: - Codex ChatGPT OAuth (Responses API)
+
+struct CodexChatGPTProvider: AIProvider {
+    let accessToken: String
+    let accountID: String
+    let defaultModel: String
+
+    var displayName: String { "Codex" }
+
+    private static let endpoint = URL(string: "https://chatgpt.com/backend-api/codex/responses")!
+    private static let modelsURL = URL(string: "https://chatgpt.com/backend-api/codex/models")!
+
+    func complete(_ request: AIChatRequest) async throws -> String {
+        var collected = ""
+        for try await chunk in stream(request) {
+            collected += chunk
+        }
+        let trimmed = collected.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw AIError.emptyResponse }
+        return trimmed
+    }
+
+    func stream(_ request: AIChatRequest) -> AsyncThrowingStream<String, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    try await streamResponses(request, continuation: continuation)
+                    continuation.finish()
+                } catch let error as AIError {
+                    continuation.finish(throwing: error)
+                } catch {
+                    continuation.finish(throwing: AIError.unreachable(error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    static func applyAuth(to req: inout URLRequest, accessToken: String, accountID: String) {
+        req.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        req.setValue(accountID, forHTTPHeaderField: "ChatGPT-Account-ID")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        req.setValue("responses=experimental", forHTTPHeaderField: "OpenAI-Beta")
+        req.setValue("nexus", forHTTPHeaderField: "originator")
+        req.setValue("Nexus/0.1", forHTTPHeaderField: "User-Agent")
+    }
+
+    private func streamResponses(
+        _ request: AIChatRequest,
+        continuation: AsyncThrowingStream<String, Error>.Continuation
+    ) async throws {
+        var req = URLRequest(url: Self.endpoint)
+        req.httpMethod = "POST"
+        Self.applyAuth(to: &req, accessToken: accessToken, accountID: accountID)
+        req.timeoutInterval = 120
+
+        let (instructions, input) = Self.mapMessages(request.messages)
+        let payload: [String: Any] = [
+            "model": request.model ?? defaultModel,
+            "instructions": instructions,
+            "store": false,
+            "stream": true,
+            "input": input,
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        let (bytes, response) = try await URLSession.shared.bytes(for: req)
+        guard let http = response as? HTTPURLResponse else { throw AIError.emptyResponse }
+        if http.statusCode >= 400 {
+            var errBody = ""
+            for try await line in bytes.lines {
+                errBody += line
+                if errBody.count > 500 { break }
+            }
+            throw AIError.httpStatus(http.statusCode, errBody)
+        }
+
+        var yielded = false
+        for try await line in bytes.lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("data:") else { continue }
+            let payload = trimmed.dropFirst(5).trimmingCharacters(in: .whitespaces)
+            if payload == "[DONE]" { break }
+            guard let data = payload.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+            if let text = Self.extractDeltaText(json), !text.isEmpty {
+                yielded = true
+                continuation.yield(text)
+            }
+        }
+        if !yielded {
+            throw AIError.emptyResponse
+        }
+    }
+
+    private static func mapMessages(_ messages: [AIMessage]) -> (String, [[String: Any]]) {
+        var instructions = "You are Codex, OpenAI's coding agent."
+        var input: [[String: Any]] = []
+        for m in messages {
+            switch m.role {
+            case .system:
+                instructions += "\n\n" + m.content
+            case .user:
+                input.append([
+                    "type": "message",
+                    "role": "user",
+                    "content": [["type": "input_text", "text": m.content]],
+                ])
+            case .assistant:
+                input.append([
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [["type": "output_text", "text": m.content]],
+                ])
+            }
+        }
+        if input.isEmpty {
+            input.append([
+                "type": "message",
+                "role": "user",
+                "content": [["type": "input_text", "text": "Hello"]],
+            ])
+        }
+        return (instructions, input)
+    }
+
+    private static func extractDeltaText(_ json: [String: Any]) -> String? {
+        let type = json["type"] as? String ?? ""
+        // Responses SSE: response.output_text.delta
+        if type.contains("output_text.delta") || type == "response.output_text.delta" {
+            if let delta = json["delta"] as? String { return delta }
+            if let text = json["text"] as? String { return text }
+        }
+        if let delta = json["delta"] as? [String: Any],
+           let text = delta["text"] as? String {
+            return text
+        }
+        if let delta = json["delta"] as? String {
+            return delta
+        }
+        return nil
+    }
+
+    /// Probe used by Settings → Test connection.
+    static func testConnection(accessToken: String, accountID: String) async -> AIConfiguration.ConnectionTestResult {
+        var req = URLRequest(url: modelsURL)
+        req.httpMethod = "GET"
+        applyAuth(to: &req, accessToken: accessToken, accountID: accountID)
+        req.timeoutInterval = 15
+        do {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                return .failure("No HTTP response from Codex.")
+            }
+            if http.statusCode == 401 || http.statusCode == 403 {
+                return .failure("Codex rejected the CLI login (HTTP \(http.statusCode)). Run `codex` to refresh.")
+            }
+            guard (200..<300).contains(http.statusCode) else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                return .failure("Codex HTTP \(http.statusCode): \(body.prefix(160))")
+            }
+            return .ok("Codex CLI login reachable")
+        } catch {
+            return .failure(error.localizedDescription)
+        }
     }
 }
 

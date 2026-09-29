@@ -94,17 +94,22 @@ struct AskNexusPanel: View {
 
     private var providerStatusLabel: String {
         if aiConfig.isEnabled {
+            if let extra = aiConfig.activeCredentialLabel {
+                return "\(aiConfig.providerKind.title) · \(extra)"
+            }
             return aiConfig.providerKind.title
         }
         switch aiConfig.providerKind {
         case .disabled:
             return "Offline"
-        case .openai where !aiConfig.hasOpenAIKey:
-            return "OpenAI — needs key"
+        case .openai:
+            return "OpenAI — needs key/CLI"
         case .xai where !aiConfig.hasXAIKey:
             return "xAI — needs key"
-        case .anthropic where !aiConfig.hasAnthropicKey:
-            return "Claude — needs key"
+        case .anthropic:
+            return "Claude — needs key/CLI"
+        case .deepseek:
+            return "DeepSeek — needs key/.env"
         case .remoteOpenAI where !aiConfig.hasRemoteOpenAIKey:
             return "Remote — needs key"
         default:
