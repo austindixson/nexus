@@ -4,6 +4,7 @@ import AppKit
 /// Right-sidebar panel: grounded vault Q&A with clickable citations + studio.
 struct AskNexusPanel: View {
     @EnvironmentObject private var app: AppState
+    @Environment(\.openSettings) private var openSettings
     @ObservedObject private var aiConfig = AIConfiguration.shared
 
     @State private var question = ""
@@ -46,20 +47,64 @@ struct AskNexusPanel: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .center, spacing: 8) {
             Label("Ask Nexus", systemImage: "sparkles")
                 .font(.headline)
                 .labelStyle(.titleAndIcon)
             Spacer(minLength: 4)
-            Text(aiConfig.isEnabled ? aiConfig.providerKind.title : "Offline")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(aiConfig.isEnabled ? .secondary : Color.orange)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(
-                    (aiConfig.isEnabled ? Color.primary.opacity(0.06) : Color.orange.opacity(0.15)),
-                    in: Capsule()
-                )
+            providerMenu
+        }
+    }
+
+    private var providerMenu: some View {
+        Menu {
+            ForEach(AIConfiguration.ProviderKind.allCases) { kind in
+                Button {
+                    selectProvider(kind)
+                } label: {
+                    if aiConfig.providerKind == kind {
+                        Label(kind.title, systemImage: "checkmark")
+                    } else {
+                        Text(kind.title)
+                    }
+                }
+            }
+            Divider()
+            Button("AI Settings…") {
+                openAISettings()
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(providerStatusLabel)
+                    .font(.caption2.weight(.medium))
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(aiConfig.isEnabled ? .secondary : Color.orange)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+                (aiConfig.isEnabled ? Color.primary.opacity(0.06) : Color.orange.opacity(0.15)),
+                in: Capsule()
+            )
+        }
+        .menuStyle(.borderlessButton)
+        .help("Choose an AI provider")
+    }
+
+    private var providerStatusLabel: String {
+        if aiConfig.isEnabled {
+            return aiConfig.providerKind.title
+        }
+        switch aiConfig.providerKind {
+        case .disabled:
+            return "Offline"
+        case .xai where !aiConfig.hasXAIKey:
+            return "xAI — needs key"
+        case .openAICompatible where !aiConfig.hasOpenAIKey:
+            return "OpenAI — needs key"
+        default:
+            return "Offline"
         }
     }
 
@@ -123,10 +168,18 @@ struct AskNexusPanel: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
+            Picker("Provider", selection: providerSelection) {
+                ForEach(AIConfiguration.ProviderKind.allCases) { kind in
+                    Text(kind.title).tag(kind)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(maxWidth: .infinity, alignment: .leading)
+
             HStack(spacing: 8) {
                 Button {
-                    aiConfig.providerKind = .ollama
-                    if aiConfig.modelID.isEmpty { aiConfig.modelID = "llama3.2" }
+                    selectProvider(.ollama)
                     lastAskWasOffline = false
                     Task { await runAsk() }
                 } label: {
@@ -144,6 +197,12 @@ struct AskNexusPanel: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+            }
+
+            if aiConfig.providerKind.requiresAPIKey && !aiConfig.isEnabled {
+                Text("This provider needs an API key — open AI Settings to add one.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
             }
         }
         .padding(12)
@@ -342,9 +401,26 @@ struct AskNexusPanel: View {
         }
     }
 
+    private var providerSelection: Binding<AIConfiguration.ProviderKind> {
+        Binding(
+            get: { aiConfig.providerKind },
+            set: { selectProvider($0) }
+        )
+    }
+
+    private func selectProvider(_ kind: AIConfiguration.ProviderKind) {
+        aiConfig.providerKind = kind
+        aiConfig.applyDefaultModelIfNeeded(for: kind)
+        // Keep lastAskWasOffline until a fresh Ask runs so offline hits are not
+        // re-labeled as a synthesized answer just because a provider was enabled.
+        if kind.requiresAPIKey && !aiConfig.isEnabled {
+            openAISettings()
+        }
+    }
+
     private func openAISettings() {
-        // Bring the Settings window forward; user lands on tabs including AI.
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        SettingsPane.prefer(.ai)
+        openSettings()
         NSApp.activate(ignoringOtherApps: true)
     }
 
