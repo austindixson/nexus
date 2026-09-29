@@ -459,7 +459,7 @@ final class AIConfiguration: ObservableObject {
                 return CodexChatGPTProvider(
                     accessToken: access,
                     accountID: accountID,
-                    defaultModel: modelID.isEmpty ? "gpt-5.4" : modelID
+                    defaultModel: Self.resolvedCodexModelID(modelID)
                 )
             }
         case .xai:
@@ -520,8 +520,11 @@ final class AIConfiguration: ObservableObject {
 
     /// Seeds a sensible default model when switching providers (only if empty / previous default).
     func applyDefaultModelIfNeeded(for kind: ProviderKind) {
+        let openAIDefault = (useLocalCredentials && hasCodexCLI && openAIAPIKey() == nil)
+            ? Self.codexDefaultModel
+            : "gpt-4o-mini"
         let defaults: [ProviderKind: String] = [
-            .openai: "gpt-4o-mini",
+            .openai: openAIDefault,
             .xai: "grok-4.5",
             .anthropic: "claude-sonnet-4-5",
             .deepseek: "deepseek-chat",
@@ -529,10 +532,37 @@ final class AIConfiguration: ObservableObject {
             .remoteOpenAI: "gpt-4o-mini",
         ]
         guard let next = defaults[kind] else { return }
-        let previousDefaults = Set(defaults.values).union(["gpt-5.4"])
-        if modelID.isEmpty || previousDefaults.contains(modelID) {
+        let previousDefaults: Set<String> = [
+            "gpt-4o-mini", "grok-4.5", "claude-sonnet-4-5", "deepseek-chat",
+            "llama3.2", "gpt-5.4", Self.codexDefaultModel,
+        ]
+        if modelID.isEmpty || previousDefaults.contains(modelID) || Self.isPlatformAPIOnlyModel(modelID) {
             modelID = next
         }
+    }
+
+    /// ChatGPT Codex accounts reject platform chat models like `gpt-4o-mini`.
+    static let codexDefaultModel = "gpt-5.5"
+
+    nonisolated static func isPlatformAPIOnlyModel(_ model: String) -> Bool {
+        let m = model.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if m.isEmpty { return false }
+        if m == "gpt-4o-mini" || m == "gpt-4o" || m == "chatgpt-4o" { return true }
+        if m.hasPrefix("gpt-4o") || m.hasPrefix("gpt-4-") || m.hasPrefix("gpt-4.") { return true }
+        if m.hasPrefix("gpt-3.5") { return true }
+        if m == "o1" || m.hasPrefix("o1-") { return true }
+        if m == "o3" || m.hasPrefix("o3-") { return true }
+        if m.hasPrefix("o4-") { return true }
+        return false
+    }
+
+    /// Prefer the user's Model ID when it looks Codex-compatible; otherwise fall back.
+    nonisolated static func resolvedCodexModelID(_ preferred: String) -> String {
+        let p = preferred.trimmingCharacters(in: .whitespacesAndNewlines)
+        if p.isEmpty || isPlatformAPIOnlyModel(p) {
+            return codexDefaultModel
+        }
+        return p
     }
 
     /// Cheap reachability / auth probe for the selected provider.

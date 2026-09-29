@@ -203,6 +203,11 @@ struct SettingsView: View {
                     Text("https://api.openai.com/v1 · or Codex CLI ChatGPT login when local credentials are enabled.")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
+                    if ai.useLocalCredentials && ai.hasCodexCLI && ai.openAIAPIKey() == nil {
+                        Text("Codex ChatGPT login: use a Codex model (e.g. \(AIConfiguration.codexDefaultModel)). Platform models like gpt-4o-mini are rejected.")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                 }
             }
 
