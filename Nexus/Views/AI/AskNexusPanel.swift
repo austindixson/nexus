@@ -411,10 +411,10 @@ struct AskNexusPanel: View {
     private func selectProvider(_ kind: AIConfiguration.ProviderKind) {
         aiConfig.providerKind = kind
         aiConfig.applyDefaultModelIfNeeded(for: kind)
+        // Keep lastAskWasOffline until a fresh Ask runs so offline hits are not
+        // re-labeled as a synthesized answer just because a provider was enabled.
         if kind.requiresAPIKey && !aiConfig.isEnabled {
             openAISettings()
-        } else if aiConfig.isEnabled {
-            lastAskWasOffline = false
         }
     }
 
