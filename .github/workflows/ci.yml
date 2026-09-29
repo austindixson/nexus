@@ -43,8 +43,11 @@ jobs:
 
       - name: Test
         run: |
+          # MemoryStress creates 1000-note vaults and thrash-kills subsequent
+          # SyncE2E git pushes on the shared runner; run it separately locally.
           xcodebuild \
             -scheme Nexus \
             -configuration Debug \
             -destination 'platform=macOS' \
+            -skip-testing:NexusTests/MemoryStressTests \
             test

@@ -702,6 +702,13 @@ final class GitSyncService: ObservableObject {
             // configured branch; a cycle started during that switch used to see
             // "src refspec main does not match any".
             try await ensureHeadOnConfiguredBranch(at: vaultRoot)
+            // Refuse to push an unborn HEAD — the classic "src refspec main does
+            // not match any" is opaque; surface the real cause instead.
+            let headCheck = try await git(["rev-parse", "--verify", "HEAD"])
+            if !headCheck.ok {
+                throw GitError.commandFailed("commit",
+                    "Enable sync produced no commit (empty vault or commit failed). \(headCheck.stderr)")
+            }
             if remoteHasHistory {
                 // Own history + remote history: rebase ours onto theirs now that
                 // the worktree is clean, so the push below is a fast-forward.
@@ -726,6 +733,10 @@ final class GitSyncService: ObservableObject {
         } catch {
             status.phase = .error
             status.lastError = error.localizedDescription
+            // preflight flipped enabled=true (and started the timer) before this
+            // cycle ran; a failed enable must not leave the interval loop firing
+            // against a broken vault.
+            stopCycleTimer()
             // Keep a copy for post-mortem inspection when the test harness deletes
             // the vault in tearDown.
             let dest = URL(fileURLWithPath: "/tmp/nexus-init-fail-vault")
@@ -752,7 +763,15 @@ final class GitSyncService: ObservableObject {
         // The enabled check happens when the cycle is *scheduled*; by the time it
         // runs the vault may have detached (tests close vaults between cycles),
         // and a cycle already in flight must still reach the remote.
-        guard let vaultRoot, !cycleLock else { return }
+        guard let vaultRoot else { return }
+        // Never drop a requested cycle on the floor: if another cycle holds the
+        // lock, wait for it, then run. A silent return left mutations unpushed
+        // under CI load (memory-stress → SyncE2E).
+        if cycleLock {
+            let path = vaultRoot.path
+            await waitForCycleClose(at: path)
+            guard self.vaultRoot?.path == path, !cycleLock else { return }
+        }
         cycleLock = true
         runningCyclePaths.insert(vaultRoot.path)
         if cycleContext == nil { cycleContext = CycleContext(vaultRoot: vaultRoot, settings: settings) }
@@ -1406,9 +1425,26 @@ final class GitSyncService: ObservableObject {
         SyncTrace.log("push pre: vault=\(vaultRoot?.path ?? "nil") branch=\(branch) "
             + "remote=\(cycleContext?.settings.remote ?? settings.remote) "
             + "head=\((try? await git(["rev-parse", "--short", "HEAD"]))?.stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? "?")")
-        let preHead = (try? await git(["rev-parse", "HEAD"]))?
-            .stdout.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let result = try await git(["push", "-u", "origin", branch])
+        let headRes = try await git(["rev-parse", "--verify", "HEAD"])
+        if !headRes.ok {
+            throw GitError.commandFailed("push",
+                "Cannot push: repository has no commits yet (unborn HEAD). \(headRes.stderr)")
+        }
+        let preHead = headRes.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Prefer HEAD→branch: survives branch-name drift and is the form that
+        // unpacks on the receiving side (less SIGPIPE-prone than pack-stream push).
+        var result = try await git(["push", "-u", "origin", "HEAD:refs/heads/\(branch)"])
+        if !result.ok {
+            let named = try await git(["push", "-u", "origin", branch])
+            if named.ok {
+                result = named
+            } else {
+                let bare = try await git(["push", "origin", "refs/heads/\(branch):refs/heads/\(branch)"])
+                if bare.ok || bare.exitCode == 0 { result = bare }
+                else { result = named }
+            }
+        }
         if result.ok { return }
         SyncTrace.log("push post: exit=\(result.exitCode) "
             + "remote=\(cycleContext?.settings.remote ?? settings.remote) "
@@ -1416,23 +1452,32 @@ final class GitSyncService: ObservableObject {
             + "err=\(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200))")
 
         var combined = (result.stdout + result.stderr).lowercased()
-        // git kills the pack-sending side over the "push" transport with SIGPIPE
-        // (exit 141) and prints nothing at all — the "died of signal 13" line only
-        // reaches us via the parent's status line, which the "push" form does not
-        // emit. Re-run once with an explicit refspec: the "git push <url> <src>"
-        // form unpacks on the receiving side and survives.
-        if result.exitCode == 141 || combined.contains("sigpipe") || combined.contains("signal 13") {
-            let retry = try await git(["push", "origin", "refs/heads/\(branch):refs/heads/\(branch)"])
+        // SIGPIPE (141) / SIGKILL (9) / empty output: CI sees this after memory-stress.
+        // Pause briefly and retry once with the robust HEAD refspec.
+        let looksKilled = result.exitCode == 141
+            || result.exitCode == 9
+            || result.exitCode == -9
+            || combined.contains("sigpipe")
+            || combined.contains("signal 13")
+            || combined.contains("signal 9")
+            || combined.isEmpty
+        if looksKilled {
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            let retry = try await git(["push", "origin", "HEAD:refs/heads/\(branch)"])
             if retry.ok { return }
             combined = (retry.stdout + retry.stderr).lowercased()
-            if retry.exitCode == 141 || combined.contains("sigpipe") || combined.contains("signal 13") {
-                lastGitErrorRaw = "push (sigpipe): " + (retry.stderr + " " + retry.stdout)
+            if retry.exitCode == 141 || retry.exitCode == 9 || combined.contains("sigpipe")
+                || combined.contains("signal") || combined.isEmpty {
+                lastGitErrorRaw = "push (killed): " + (retry.stderr + " " + retry.stdout)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                throw GitError.commandFailed("push", retry.stderr.isEmpty ? retry.stdout : retry.stderr)
+                let detail = SyncTrace.tail(24).joined(separator: "\n")
+                throw GitError.commandFailed("push",
+                    "git push exited with no usable output (possibly killed). Recent git activity:\n\(detail.suffix(600))")
             }
+            result = retry
+            if retry.ok { return }
+            combined = (retry.stdout + retry.stderr).lowercased()
         }
-        // A killed or timed-out git produces no output at all; surface the
-        // post-mortem trace instead of the empty "git push failed." string.
         if combined.isEmpty {
             let detail = SyncTrace.tail(24).joined(separator: "\n")
             lastGitErrorRaw = "push: empty output\n" + detail
@@ -1452,10 +1497,11 @@ final class GitSyncService: ObservableObject {
                     "Push was rejected because the remote moved ahead, but the vault has\nuncommitted changes outside Nexus' control, so the rebase was skipped.\nYour vault is untouched — sync again once the vault is clean."
                 )
             }
-            var retry = try await git(["push", "-u", "origin", branch])
+            var retry = try await git(["push", "-u", "origin", "HEAD:refs/heads/\(branch)"])
             var retryCombined = (retry.stdout + retry.stderr).lowercased()
-            if retry.exitCode == 141 || retryCombined.contains("sigpipe") || retryCombined.contains("signal 13") {
-                retry = try await git(["push", "origin", "refs/heads/\(branch):refs/heads/\(branch)"])
+            if retry.exitCode == 141 || retryCombined.contains("sigpipe") || retryCombined.contains("signal 13") || retryCombined.isEmpty {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                retry = try await git(["push", "origin", "HEAD:refs/heads/\(branch)"])
                 retryCombined = (retry.stdout + retry.stderr).lowercased()
             }
             if retry.ok { return }

@@ -194,17 +194,17 @@ final class SyncE2ETests: XCTestCase {
         sync.noteDidChange(path: "Welcome.md")
         await sync.syncNow()
         await sync.waitForSettledForTesting()
-        // The mutation must reach the remote; poll instead of sleeping so slow
-        // CI never sees a false failure (the push lands after syncNow returns).
-        let remoteTree: GitOut = {
-            var last = runGitSync(["show", "main:Welcome.md"], at: r)
-            let deadline = Date().addingTimeInterval(30)
-            while last.code != 0 && Date() < deadline {
-                Thread.sleep(forTimeInterval: 1)
-                last = runGitSync(["show", "main:Welcome.md"], at: r)
-            }
-            return last
-        }()
+        XCTAssertNil(sync.status.lastError,
+                     "mutation cycle failed: \(sync.status.lastError ?? "")")
+        // Poll for the *content* change — existence alone is satisfied by the
+        // enable-time seed commit and would hide a skipped mutation push.
+        var remoteTree = runGitSync(["show", "main:Welcome.md"], at: r)
+        let deadline = Date().addingTimeInterval(30)
+        while Date() < deadline {
+            if remoteTree.code == 0, remoteTree.stdout.contains("changed") { break }
+            Thread.sleep(forTimeInterval: 0.5)
+            remoteTree = runGitSync(["show", "main:Welcome.md"], at: r)
+        }
 
         let err = sync.status.lastError ?? ""
         XCTAssert(err.isEmpty || !err.contains("Please tell me who you are"),
