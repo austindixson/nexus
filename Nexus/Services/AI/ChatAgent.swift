@@ -110,7 +110,8 @@ enum ChatAgent {
         )
     }
 
-    /// Offline-only answer when AI is disabled: return ranked passages as a structured brief.
+    /// Offline-only answer when AI is disabled: ranked passages for the UI cards.
+    /// Keep `text` short — the panel renders hits as structured result rows, not raw markdown.
     static func offlineBrief(
         question: String,
         notes: [String: NoteDocument],
@@ -134,16 +135,16 @@ enum ChatAgent {
         let used = Array(passages.prefix(8))
         if used.isEmpty {
             return AskNexusAnswer(
-                text: "No matching notes found for “\(question)”. Try different keywords, or enable AI in Settings for generative answers.",
+                text: "No matching notes for “\(question)”. Try different keywords, or enable AI for a synthesized answer.",
                 citations: [],
                 usedProvider: "Offline FTS"
             )
         }
-        var md = "**Search results** for “\(question)” (offline — enable AI for synthesized answers):\n\n"
-        for (i, p) in used.enumerated() {
-            md += "### [\(i + 1)] [[\(p.title)]] (`\(p.path)`)\n"
-            md += "> \(p.snippet)\n\n"
-        }
-        return AskNexusAnswer(text: md, citations: used, usedProvider: "Offline FTS")
+        let noun = used.count == 1 ? "hit" : "hits"
+        return AskNexusAnswer(
+            text: "\(used.count) vault \(noun) for “\(question)”. Enable AI to synthesize these into an answer.",
+            citations: used,
+            usedProvider: "Offline FTS"
+        )
     }
 }
