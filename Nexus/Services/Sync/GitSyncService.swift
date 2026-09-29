@@ -676,8 +676,14 @@ final class GitSyncService: ObservableObject {
                 let headOk = (try? await git(["rev-parse", "--verify", "HEAD"]))?.ok ?? false
                 if !headOk {
                     status.lastAction = "Adopting remote history…"
-                    _ = try await git(["fetch", "origin", "refs/heads/\(remoteBranch):refs/remotes/origin/\(remoteBranch)"])
-                    _ = try await git(["checkout", "-q", "-B", remoteBranch, "origin/\(remoteBranch)"])
+                    let fetch = try await git(["fetch", "origin", "refs/heads/\(remoteBranch):refs/remotes/origin/\(remoteBranch)"])
+                    guard fetch.ok else {
+                        throw GitError.commandFailed("fetch", fetch.stderr.isEmpty ? fetch.stdout : fetch.stderr)
+                    }
+                    let checkout = try await git(["checkout", "-q", "-B", remoteBranch, "origin/\(remoteBranch)"])
+                    guard checkout.ok else {
+                        throw GitError.commandFailed("checkout", checkout.stderr.isEmpty ? checkout.stdout : checkout.stderr)
+                    }
                 }
             }
             // The safety ignore runs *before* the first commit so .nexus/
@@ -692,7 +698,8 @@ final class GitSyncService: ObservableObject {
             // enable-time git operations must not require it: skipping the commit
             // silently used to leave the vault unborn, and the push then failed
             // with "src refspec main does not match any".
-            _ = try await commitLocalChanges(message: "nexus: enable sync \(Self.stamp())", requireEnabled: false)
+            let madeEnableCommit = try await commitLocalChanges(
+                message: "nexus: enable sync \(Self.stamp())", requireEnabled: false)
             // Drop any sidecars an older build tracked, then commit that cleanup:
             // an untracked-but-dirty index would make the pull below refuse with
             // "cannot pull with rebase: You have unstaged changes".
@@ -706,8 +713,12 @@ final class GitSyncService: ObservableObject {
             // not match any" is opaque; surface the real cause instead.
             let headCheck = try await git(["rev-parse", "--verify", "HEAD"])
             if !headCheck.ok {
+                let listing = (try? await git(["status", "--porcelain", "-uall"]))?.stdout ?? ""
+                let files = (try? FileManager.default.contentsOfDirectory(atPath: vaultRoot.path))?.joined(separator: ",") ?? ""
                 throw GitError.commandFailed("commit",
-                    "Enable sync produced no commit (empty vault or commit failed). \(headCheck.stderr)")
+                    "Enable sync produced no commit (empty vault or commit failed). "
+                    + "madeEnableCommit=\(madeEnableCommit) status=[\(listing.prefix(200))] files=[\(files.prefix(200))] "
+                    + headCheck.stderr)
             }
             if remoteHasHistory {
                 // Own history + remote history: rebase ours onto theirs now that
@@ -886,6 +897,8 @@ final class GitSyncService: ObservableObject {
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
             "GIT_TERMINAL_PROMPT": "0",
             "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
         ]
         let outData = OutputCollector()
         let errData = OutputCollector()
@@ -930,11 +943,16 @@ final class GitSyncService: ObservableObject {
                 // Minimal env: never leak the app's environment into git.
                 // GIT_SSH_COMMAND is intentionally not inherited (no user shell overrides);
                 // HOME is required for ssh key discovery, PATH for /usr/bin/git helpers.
+                // Wipe user/system gitconfig so a runner's ~/.gitconfig (e.g.
+                // status.showUntrackedFiles=no, commit.gpgsign) cannot make
+                // enable-time commits see an "empty" vault.
                 var env: [String: String] = [
                     "HOME": NSHomeDirectory(),
                     "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
                     "GIT_TERMINAL_PROMPT": "0", // never block on an interactive credential prompt
-                    "GIT_CONFIG_NOSYSTEM": "1", // ignore /etc/gitconfig surprises
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_CONFIG_GLOBAL": "/dev/null",
+                    "GIT_CONFIG_SYSTEM": "/dev/null",
                 ]
                 if let home = ProcessInfo.processInfo.environment["HOME"] { env["HOME"] = home }
                 if let sshAuth = ProcessInfo.processInfo.environment["SSH_AUTH_SOCK"] { env["SSH_AUTH_SOCK"] = sshAuth }
@@ -1059,7 +1077,11 @@ final class GitSyncService: ObservableObject {
             fileAllow = "always"
             args += ["-c", "safe.directory=\(path)", "-c", "safe.directory=\(vaultRoot.path)"]
         }
-        args += ["-c", "protocol.file.allow=\(fileAllow)"] + arguments
+        args += [
+            "-c", "protocol.file.allow=\(fileAllow)",
+            "-c", "commit.gpgsign=false",
+            "-c", "status.showUntrackedFiles=normal",
+        ] + arguments
         let remote = ctx?.remote ?? GitRemote.parse(settings.remote)
         let res = try await withAskpassInstalled(using: remote) {
             try await self.runGit(args, at: vaultRoot, timeout: Self.gitTimeout(for: arguments))
